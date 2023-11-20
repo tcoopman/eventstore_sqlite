@@ -2,11 +2,11 @@ defmodule EventstoreSqlite.RecordedEvent do
   use TypedStruct
 
   typedstruct do
-    field :event_uuid, Ecto.UUID.t()
+    field :id, Ecto.UUID.t()
     field :data, :any
   end
 
-  def parse(uuid, type, data) do
+  def parse(id, type, data) do
     event_type = type |> String.to_existing_atom()
 
     keys =
@@ -25,7 +25,7 @@ defmodule EventstoreSqlite.RecordedEvent do
     data = struct!(event_type, map)
 
     %EventstoreSqlite.RecordedEvent{
-      event_uuid: uuid,
+      id: id,
       data: data
     }
   end

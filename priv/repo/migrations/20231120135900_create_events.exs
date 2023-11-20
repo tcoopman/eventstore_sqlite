@@ -18,8 +18,8 @@ defmodule EventstoreSqlite.Repo.Migrations.CreateEvents do
     #     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
     # );
 
-    create table(:events) do
-      add(:uuid, :uuid, null: false)
+    create table(:events, primary_key: false) do
+      add(:id, :uuid, primary_key: true)
       add(:type, :text, null: false)
       add(:data, :text, null: false)
       add(:metadata, :text)
@@ -39,7 +39,7 @@ defmodule EventstoreSqlite.Repo.Migrations.CreateEvents do
     # );
 
     create table(:stream_events) do
-      add(:event_id, references(:events))
+      add(:event_id, references(:events, type: :binary))
       add(:stream_id, references(:streams, column: :stream_id))
       add(:stream_version, :integer, null: false)
       add(:original_stream_id, references(:streams, column: :stream_id))
@@ -48,6 +48,7 @@ defmodule EventstoreSqlite.Repo.Migrations.CreateEvents do
       timestamps(updated_at: false, inserted_at: false, type: :utc_datetime)
     end
 
+    create(unique_index(:events, [:id]))
     create(unique_index(:streams, [:stream_id]))
     create(unique_index(:stream_events, [:stream_id, :stream_version]))
 

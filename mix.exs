@@ -33,7 +33,8 @@ defmodule EventstoreSqlite.MixProject do
       {:ecto_sqlite3, ">= 0.0.0"},
       {:jason, "~> 1.4"},
       {:mneme, ">= 0.0.0", only: [:dev, :test]},
-      {:typed_struct, "~> 0.3.0"}
+      {:typed_struct, "~> 0.3.0"},
+      {:uniq, "~> 0.1"}
     ]
   end
 

@@ -15,7 +15,7 @@ defmodule EventstoreSqlite do
         where: s.stream_id == ^stream_id and s.stream_version >= ^start_version,
         join: event in Event,
         on: s.event_id == event.id,
-        select: %{uuid: event.uuid, type: event.type, data: event.data},
+        select: %{id: event.id, type: event.type, data: event.data},
         limit: ^limit
       )
 
@@ -67,7 +67,7 @@ defmodule EventstoreSqlite do
       values =
         events
         |> Enum.with_index(fn event, index ->
-          "(#{index}, #{event.id})"
+          "(#{index}, '#{event.id}')"
         end)
         |> Enum.join(",")
 
@@ -97,6 +97,6 @@ defmodule EventstoreSqlite do
   end
 
   defp parse_event(event) do
-    EventstoreSqlite.RecordedEvent.parse(event.uuid, event.type, event.data)
+    EventstoreSqlite.RecordedEvent.parse(event.id, event.type, event.data)
   end
 end

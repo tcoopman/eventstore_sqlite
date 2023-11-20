@@ -11,7 +11,7 @@ defmodule EventstoreSqliteTest do
   alias EventstoreSqlite.Event
 
   typedstruct module: FooTestEvent do
-    field :text, :string
+    field(:text, :string)
   end
 
   describe "append_to_stream/2" do
@@ -46,10 +46,22 @@ defmodule EventstoreSqliteTest do
       )
     end
 
-    test "respect count" do
+    test "events must be unique" do
       stream_id = "test-stream-1"
       event = Event.new(%FooTestEvent{text: "some text"})
-      :ok = EventstoreSqlite.append_to_stream(stream_id, [event, event, event])
+
+      auto_assert_raise(
+        Exqlite.Error,
+        EventstoreSqlite.append_to_stream(stream_id, [event, event])
+      )
+    end
+
+    test "respect count" do
+      stream_id = "test-stream-1"
+      event1 = Event.new(%FooTestEvent{text: "some text"})
+      event2 = Event.new(%FooTestEvent{text: "some text"})
+      event3 = Event.new(%FooTestEvent{text: "some text"})
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
 
       auto_assert(
         [
@@ -78,7 +90,7 @@ defmodule EventstoreSqliteTest do
         ] <- EventstoreSqlite.read_stream_forward(stream_id, start_version: 1)
       )
 
-      auto_assert [] <- EventstoreSqlite.read_stream_forward("empty-stream")
+      auto_assert([] <- EventstoreSqlite.read_stream_forward("empty-stream"))
     end
   end
 end

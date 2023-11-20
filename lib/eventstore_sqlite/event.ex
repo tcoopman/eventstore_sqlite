@@ -2,8 +2,8 @@ defmodule EventstoreSqlite.Event do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @primary_key {:id, :binary_id, []}
   schema "events" do
-    field :uuid, Ecto.UUID
     field :type, :string
     field :data, :map
     field :metadata, :map
@@ -15,7 +15,7 @@ defmodule EventstoreSqlite.Event do
     date = DateTime.utc_now() |> DateTime.truncate(:second)
 
     data = %{
-      uuid: Ecto.UUID.generate(),
+      id: Uniq.UUID.uuid7(),
       data: Map.delete(event, :__struct__),
       type: event.__struct__ |> Atom.to_string(),
       inserted_at: date
@@ -27,7 +27,7 @@ defmodule EventstoreSqlite.Event do
   @doc false
   def changeset(event, attrs) do
     event
-    |> cast(attrs, [:uuid, :type, :data, :metadata, :inserted_at])
-    |> validate_required([:uuid, :data, :type, :inserted_at])
+    |> cast(attrs, [:id, :type, :data, :metadata, :inserted_at])
+    |> validate_required([:id, :data, :type, :inserted_at])
   end
 end
