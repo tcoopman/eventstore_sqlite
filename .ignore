@@ -24,6 +24,3 @@ eventstore_sqlite-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
-
-# sqlite databases
-*.db*
