@@ -5,7 +5,7 @@ defmodule EventstoreSqlite.Event do
   @primary_key {:id, :binary_id, []}
   schema "events" do
     field :type, :string
-    field :data, :map
+    field :data, :binary
     field :metadata, :map
 
     timestamps(updated_at: false, type: :utc_datetime)
@@ -16,7 +16,7 @@ defmodule EventstoreSqlite.Event do
 
     data = %{
       id: Uniq.UUID.uuid7(),
-      data: Map.delete(event, :__struct__),
+      data: event |> :erlang.term_to_binary(),
       type: event.__struct__ |> Atom.to_string(),
       inserted_at: date
     }

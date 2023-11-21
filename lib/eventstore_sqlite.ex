@@ -28,6 +28,7 @@ defmodule EventstoreSqlite do
   def append_to_stream(_stream_id, []), do: :ok
 
   def append_to_stream(stream_id, events) when is_binary(stream_id) and is_list(events) do
+    events = Enum.map(events, &Event.new(&1))
     {:ok, _} =
       Ecto.Multi.new()
       |> insert_events(events)

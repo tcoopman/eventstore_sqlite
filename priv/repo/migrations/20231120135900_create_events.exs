@@ -21,8 +21,8 @@ defmodule EventstoreSqlite.Repo.Migrations.CreateEvents do
     create table(:events, primary_key: false) do
       add(:id, :uuid, primary_key: true)
       add(:type, :text, null: false)
-      add(:data, :text, null: false)
-      add(:metadata, :text)
+      add(:data, :blob, null: false)
+      add(:metadata, :blob)
 
       timestamps(updated_at: false, type: :utc_datetime)
     end

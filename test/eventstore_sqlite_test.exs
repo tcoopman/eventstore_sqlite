@@ -7,18 +7,12 @@ defmodule EventstoreSqliteTest do
 
   doctest EventstoreSqlite
 
-  alias EventstoreSqliteTest.FooTestEvent
-  alias EventstoreSqlite.Event
-
   typedstruct module: FooTestEvent do
     field(:text, :string)
   end
 
-  defmodule Complex do
-    @derive Jason.Encoder
-    typedstruct do
-      field(:c, :string)
-    end
+  typedstruct module: Complex do
+    field(:c, :string)
   end
 
   typedstruct module: ComplexEvent do
@@ -31,22 +25,12 @@ defmodule EventstoreSqliteTest do
     end
 
     test "1 event" do
-      event = Event.new(%FooTestEvent{text: "some text"})
+      event = %FooTestEvent{text: "some text"}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
     end
 
-    test "events must be unique" do
-      stream_id = "test-stream-1"
-      event = Event.new(%FooTestEvent{text: "some text"})
-
-      auto_assert_raise(
-        Exqlite.Error,
-        EventstoreSqlite.append_to_stream(stream_id, [event, event])
-      )
-    end
-
     test "handles nested structures" do
-      event = Event.new(%ComplexEvent{complex: %Complex{c: "complex"}})
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
     end
   end
@@ -60,7 +44,7 @@ defmodule EventstoreSqliteTest do
 
     test "1 event" do
       stream_id = "test-stream-1"
-      event = Event.new(%FooTestEvent{text: "some text"})
+      event = %FooTestEvent{text: "some text"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
 
       auto_assert(
@@ -74,9 +58,9 @@ defmodule EventstoreSqliteTest do
 
     test "respect count" do
       stream_id = "test-stream-1"
-      event1 = Event.new(%FooTestEvent{text: "some text"})
-      event2 = Event.new(%FooTestEvent{text: "some text"})
-      event3 = Event.new(%FooTestEvent{text: "some text"})
+      event1 = %FooTestEvent{text: "some text"}
+      event2 = %FooTestEvent{text: "some text"}
+      event3 = %FooTestEvent{text: "some text"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
 
       auto_assert(
@@ -90,9 +74,9 @@ defmodule EventstoreSqliteTest do
 
     test "respect start version" do
       stream_id = "test-stream-1"
-      event_1 = Event.new(%FooTestEvent{text: "1"})
-      event_2 = Event.new(%FooTestEvent{text: "2"})
-      event_3 = Event.new(%FooTestEvent{text: "3"})
+      event_1 = %FooTestEvent{text: "1"}
+      event_2 = %FooTestEvent{text: "2"}
+      event_3 = %FooTestEvent{text: "3"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event_1, event_2, event_3])
 
       auto_assert(
@@ -110,14 +94,13 @@ defmodule EventstoreSqliteTest do
     end
 
     test "handles nested structures" do
-      event = Event.new(%ComplexEvent{complex: %Complex{c: "complex"}})
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
       auto_assert(
         [
           %EventstoreSqlite.RecordedEvent{
-            data: %ComplexEvent{complex: %{"c" => "complex"}},
-            id: "018bf0f4-7e78-7bf0-baaf-4716ae307af6"
+            data: %ComplexEvent{complex: %Complex{c: "complex"}}
           }
         ] <- EventstoreSqlite.read_stream_forward("test-stream-1")
       )
