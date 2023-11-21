@@ -29,6 +29,7 @@ defmodule EventstoreSqlite do
 
   def append_to_stream(stream_id, events) when is_binary(stream_id) and is_list(events) do
     events = Enum.map(events, &Event.new(&1))
+
     {:ok, _} =
       Ecto.Multi.new()
       |> insert_events(events)
@@ -47,23 +48,25 @@ defmodule EventstoreSqlite do
          %Stream{stream_id: stream_id, stream_version: 0}}
     end)
     |> Ecto.Multi.insert_or_update({:insert_stream, stream_id}, fn %{
+                                                                     :insert_events =>
+                                                                       {_, events},
                                                                      {:stream, ^stream_id} =>
                                                                        stream
                                                                    } ->
       case stream.id do
         nil ->
-          Ecto.Changeset.change(stream)
+          Ecto.Changeset.change(stream, stream_version: Enum.count(events))
 
         _ ->
-          Ecto.Changeset.change(stream, stream_version: stream.stream_version + 1)
+          Ecto.Changeset.change(stream,
+            stream_version: stream.stream_version + Enum.count(events)
+          )
       end
     end)
     |> Ecto.Multi.run({:stream_events, stream_id}, fn repo,
                                                       %{
-                                                        :insert_events => {_, events},
-                                                        {:insert_stream, ^stream_id} => %{
-                                                          stream_version: stream_version
-                                                        }
+                                                        {:stream, ^stream_id} => stream,
+                                                        :insert_events => {_, events}
                                                       } ->
       values =
         events
@@ -83,7 +86,7 @@ defmodule EventstoreSqlite do
         RETURNING 1
       """
 
-      Ecto.Adapters.SQL.query(repo, query, [stream_version])
+      Ecto.Adapters.SQL.query(repo, query, [stream.stream_version])
     end)
   end
 

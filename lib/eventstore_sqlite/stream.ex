@@ -3,8 +3,8 @@ defmodule EventstoreSqlite.Stream do
   import Ecto.Changeset
 
   schema "streams" do
-    field :stream_id, :string
-    field :stream_version, :integer
+    field(:stream_id, :string)
+    field(:stream_version, :integer)
 
     timestamps(updated_at: false, type: :utc_datetime)
   end

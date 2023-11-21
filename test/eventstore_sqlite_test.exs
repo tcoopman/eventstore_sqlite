@@ -29,6 +29,18 @@ defmodule EventstoreSqliteTest do
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
     end
 
+    test "multitple events after each other" do
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event])
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event])
+    end
+
+    test "multitple events at the start" do
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event])
+    end
+
     test "handles nested structures" do
       event = %ComplexEvent{complex: %Complex{c: "complex"}}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
@@ -42,6 +54,7 @@ defmodule EventstoreSqliteTest do
       )
     end
 
+    @tag :only
     test "1 event" do
       stream_id = "test-stream-1"
       event = %FooTestEvent{text: "some text"}
@@ -103,6 +116,41 @@ defmodule EventstoreSqliteTest do
             data: %ComplexEvent{complex: %Complex{c: "complex"}}
           }
         ] <- EventstoreSqlite.read_stream_forward("test-stream-1")
+      )
+    end
+  end
+
+  describe "read_stream_forward - $all stream" do
+    test "combine both streams" do
+      event_1 = %FooTestEvent{text: "1"}
+      event_2 = %FooTestEvent{text: "2"}
+      event_3 = %FooTestEvent{text: "3"}
+      :ok = EventstoreSqlite.append_to_stream("stream-1", [event_1, event_2, event_3])
+      :ok = EventstoreSqlite.append_to_stream("stream-2", [event_2, event_3])
+
+      auto_assert(
+        [
+          %EventstoreSqlite.RecordedEvent{
+            data: %FooTestEvent{text: "1"},
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+          },
+          %EventstoreSqlite.RecordedEvent{
+            data: %FooTestEvent{text: "2"},
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+          },
+          %EventstoreSqlite.RecordedEvent{
+            data: %FooTestEvent{text: "3"},
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+          },
+          %EventstoreSqlite.RecordedEvent{
+            data: %FooTestEvent{text: "2"},
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+          },
+          %EventstoreSqlite.RecordedEvent{
+            data: %FooTestEvent{text: "3"},
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+          }
+        ] <- EventstoreSqlite.read_stream_forward("$all")
       )
     end
   end

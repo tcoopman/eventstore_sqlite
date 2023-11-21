@@ -4,9 +4,9 @@ defmodule EventstoreSqlite.Event do
 
   @primary_key {:id, :binary_id, []}
   schema "events" do
-    field :type, :string
-    field :data, :binary
-    field :metadata, :map
+    field(:type, :string)
+    field(:data, :binary)
+    field(:metadata, :map)
 
     timestamps(updated_at: false, type: :utc_datetime)
   end
