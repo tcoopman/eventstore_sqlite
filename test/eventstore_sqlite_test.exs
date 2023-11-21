@@ -54,7 +54,6 @@ defmodule EventstoreSqliteTest do
       )
     end
 
-    @tag :only
     test "1 event" do
       stream_id = "test-stream-1"
       event = %FooTestEvent{text: "some text"}
@@ -63,9 +62,14 @@ defmodule EventstoreSqliteTest do
       auto_assert(
         [
           %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "some text"}
+            created_at: date,
+            data: %FooTestEvent{text: "some text"},
+            stream_id: "test-stream-1",
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
           }
-        ] <- EventstoreSqlite.read_stream_forward(stream_id, start_version: 0, count: 1)
+        ]
+        when is_struct(date, DateTime) <-
+          EventstoreSqlite.read_stream_forward(stream_id, start_version: 0, count: 1)
       )
     end
 

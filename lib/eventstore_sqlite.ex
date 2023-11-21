@@ -15,13 +15,19 @@ defmodule EventstoreSqlite do
         where: s.stream_id == ^stream_id and s.stream_version >= ^start_version,
         join: event in Event,
         on: s.event_id == event.id,
-        select: %{id: event.id, type: event.type, data: event.data},
+        select: %{id: event.id, type: event.type, data: event.data, created: event.inserted_at},
         limit: ^limit
       )
 
     EventstoreSqlite.Repo.all(query)
     |> Enum.map(fn event ->
-      parse_event(event)
+      EventstoreSqlite.RecordedEvent.parse(
+        event.id,
+        event.type,
+        stream_id,
+        event.data,
+        event.created
+      )
     end)
   end
 
@@ -98,9 +104,5 @@ defmodule EventstoreSqlite do
       fn _ -> Enum.map(events, &Map.drop(&1, [:__struct__, :__meta__])) end,
       returning: [:id]
     )
-  end
-
-  defp parse_event(event) do
-    EventstoreSqlite.RecordedEvent.parse(event.id, event.type, event.data)
   end
 end
