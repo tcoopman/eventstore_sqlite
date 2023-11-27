@@ -45,6 +45,44 @@ defmodule EventstoreSqliteTest do
       event = %ComplexEvent{complex: %Complex{c: "complex"}}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
     end
+
+    test "only when the stream does not exist yet" do
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event], :no_stream)
+
+      assert {:error, :wrong_expected_version} =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event], :no_stream)
+    end
+
+    test "only when the stream already exists" do
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
+
+      assert {:error, :wrong_expected_version} =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event], :stream_exists)
+    end
+
+    test "only when the correct version already exists" do
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
+
+      assert :ok =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event])
+
+      assert {:error, :wrong_expected_version} =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event], {:version, 0})
+
+      assert :ok =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event], {:version, 1})
+
+      assert :ok =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event], {:version, 2})
+    end
+
+    test "stream version 0 also works, only if it doesn't exist yet" do
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
+
+      assert :ok =
+               EventstoreSqlite.append_to_stream("test-stream-1", [event], {:version, 0})
+    end
   end
 
   describe "read_stream_forward" do
@@ -65,7 +103,8 @@ defmodule EventstoreSqliteTest do
             created_at: date,
             data: %FooTestEvent{text: "some text"},
             stream_id: "test-stream-1",
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent",
+            stream_version: 0
           }
         ]
         when is_struct(date, DateTime) <-
