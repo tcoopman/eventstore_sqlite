@@ -197,4 +197,77 @@ defmodule EventstoreSqliteTest do
       )
     end
   end
+
+  describe "read_stream_backward" do
+    test "stream does not exist" do
+      auto_assert(
+        [] <- EventstoreSqlite.read_stream_backward("does-not-exist", count: 1)
+      )
+    end
+
+    test "1 event" do
+      stream_id = "test-stream-1"
+      event = %FooTestEvent{text: "some text"}
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
+
+      auto_assert(
+        [
+          %EventstoreSqlite.RecordedEvent{
+            created_at: date,
+            data: %FooTestEvent{text: "some text"},
+            stream_id: "test-stream-1",
+            type: "Elixir.EventstoreSqliteTest.FooTestEvent",
+            stream_version: 0
+          }
+        ]
+        when is_struct(date, DateTime) <-
+          EventstoreSqlite.read_stream_backward(stream_id, count: 1)
+      )
+    end
+
+    test "multiple events" do
+      stream_id = "test-stream-1"
+      event1 = %FooTestEvent{text: "1"}
+      event2 = %FooTestEvent{text: "2"}
+      event3 = %FooTestEvent{text: "3"}
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
+
+      auto_assert(
+        [
+          %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "3"}},
+          %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "2"}},
+          %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "1"}}
+        ] <- EventstoreSqlite.read_stream_backward(stream_id)
+      )
+    end
+
+    test "respect count" do
+      stream_id = "test-stream-1"
+      event1 = %FooTestEvent{text: "1"}
+      event2 = %FooTestEvent{text: "2"}
+      event3 = %FooTestEvent{text: "3"}
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
+
+      auto_assert(
+        [
+          %EventstoreSqlite.RecordedEvent{
+            data: %FooTestEvent{text: "3"}
+          }
+        ] <- EventstoreSqlite.read_stream_backward(stream_id, count: 1)
+      )
+    end
+
+    test "handles nested structures" do
+      event = %ComplexEvent{complex: %Complex{c: "complex"}}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
+
+      auto_assert(
+        [
+          %EventstoreSqlite.RecordedEvent{
+            data: %ComplexEvent{complex: %Complex{c: "complex"}}
+          }
+        ] <- EventstoreSqlite.read_stream_backward("test-stream-1")
+      )
+    end
+  end
 end

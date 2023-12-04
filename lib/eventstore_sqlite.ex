@@ -10,33 +10,15 @@ defmodule EventstoreSqlite do
     limit = Keyword.get(opts, :count, 10000)
     start_version = Keyword.get(opts, :start_version, 0)
 
-    query =
-      from(s in "stream_events",
-        where: s.stream_id == ^stream_id and s.stream_version >= ^start_version,
-        join: event in Event,
-        on: s.event_id == event.id,
-        select: %{
-          id: event.id,
-          type: event.type,
-          data: event.data,
-          created: event.inserted_at,
-          stream_version: s.stream_version
-        },
-        limit: ^limit
-      )
-
-    EventstoreSqlite.Repo.all(query)
-    |> Enum.map(fn event ->
-      EventstoreSqlite.RecordedEvent.parse(
-        event.id,
-        event.type,
-        stream_id,
-        event.data,
-        event.created,
-        event.stream_version
-      )
-    end)
+    read_stream_in_direction(stream_id, :asc, limit, start_version)
   end
+
+  def read_stream_backward(stream_id, opts \\ []) when is_binary(stream_id) do
+    limit = Keyword.get(opts, :count, 10000)
+
+    read_stream_in_direction(stream_id, :desc, limit, 0)
+  end
+
 
   def append_to_stream(stream_id, events, expected_version \\ :any_version)
 
@@ -158,6 +140,36 @@ defmodule EventstoreSqlite do
       """
 
       Ecto.Adapters.SQL.query(repo, query, [stream.stream_version])
+    end)
+  end
+
+  defp read_stream_in_direction(stream_id, asc_or_desc, limit, start_version) do
+    query =
+      from(s in "stream_events",
+        where: s.stream_id == ^stream_id and s.stream_version >= ^start_version,
+        join: event in Event,
+        on: s.event_id == event.id,
+        select: %{
+          id: event.id,
+          type: event.type,
+          data: event.data,
+          created: event.inserted_at,
+          stream_version: s.stream_version
+        },
+        limit: ^limit,
+        order_by: [{^asc_or_desc, s.id}]
+      )
+
+    EventstoreSqlite.Repo.all(query)
+    |> Enum.map(fn event ->
+      EventstoreSqlite.RecordedEvent.parse(
+        event.id,
+        event.type,
+        stream_id,
+        event.data,
+        event.created,
+        event.stream_version
+      )
     end)
   end
 end
