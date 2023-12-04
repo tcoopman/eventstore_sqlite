@@ -7,7 +7,7 @@ defmodule EventstoreSqlite do
   @all_stream_id "$all"
 
   def read_stream_forward(stream_id, opts \\ []) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, 100)
+    limit = Keyword.get(opts, :count, 10000)
     start_version = Keyword.get(opts, :start_version, 0)
 
     query =
