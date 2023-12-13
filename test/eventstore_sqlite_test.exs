@@ -88,7 +88,7 @@ defmodule EventstoreSqliteTest do
   describe "read_stream_forward" do
     test "stream does not exist" do
       auto_assert(
-        [] <- EventstoreSqlite.read_stream_forward("does-not-exist", start_version: 0, count: 1)
+        [] <- EventstoreSqlite.read_stream_forward("does-not-exist", count: 1)
       )
     end
 
@@ -108,7 +108,7 @@ defmodule EventstoreSqliteTest do
           }
         ]
         when is_struct(date, DateTime) <-
-          EventstoreSqlite.read_stream_forward(stream_id, start_version: 0, count: 1)
+          EventstoreSqlite.read_stream_forward({stream_id, 0}, count: 1)
       )
     end
 
@@ -124,7 +124,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %FooTestEvent{text: "some text"}
           }
-        ] <- EventstoreSqlite.read_stream_forward(stream_id, start_version: 0, count: 1)
+        ] <- EventstoreSqlite.read_stream_forward(stream_id, count: 1)
       )
     end
 
@@ -143,7 +143,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %FooTestEvent{text: "3"}
           }
-        ] <- EventstoreSqlite.read_stream_forward(stream_id, start_version: 1)
+        ] <- EventstoreSqlite.read_stream_forward({stream_id, 1})
       )
 
       auto_assert([] <- EventstoreSqlite.read_stream_forward("empty-stream"))
