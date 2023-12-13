@@ -1,24 +1,50 @@
 defmodule EventstoreSqlite do
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, dynamic: 2]
 
   alias EventstoreSqlite.{Stream}
   alias EventstoreSqlite.Event
 
   @all_stream_id "$all"
 
-  def read_stream_forward(stream_id, opts \\ []) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, 10000)
+  def read_stream_forward(stream_id, opts \\ [])
+
+  def read_stream_forward(stream_id, opts) when is_binary(stream_id) do
     start_version = Keyword.get(opts, :start_version, 0)
+    limit = Keyword.get(opts, :count, 10_000)
 
-    read_stream_in_direction(stream_id, :asc, limit, start_version)
+    read_streams_in_direction([{stream_id, start_version}], :asc, limit)
   end
 
-  def read_stream_backward(stream_id, opts \\ []) when is_binary(stream_id) do
+  def read_stream_forward(stream_ids, opts) when is_list(stream_ids) do
+    limit = Keyword.get(opts, :count, 10_000)
+
+    stream_ids_with_version =
+      Enum.map(stream_ids, fn
+        {stream_id, start_version} -> {stream_id, start_version}
+        stream_id -> {stream_id, 0}
+      end)
+
+    read_streams_in_direction(stream_ids_with_version, :asc, limit)
+  end
+
+  def read_stream_backward(stream_id, opts \\ [])
+
+  def read_stream_backward(stream_id, opts) when is_binary(stream_id) do
     limit = Keyword.get(opts, :count, 10000)
 
-    read_stream_in_direction(stream_id, :desc, limit, 0)
+    read_streams_in_direction([{stream_id, 0}], :desc, limit)
   end
 
+  def read_stream_backward(stream_ids, opts) when is_list(stream_ids) do
+    limit = Keyword.get(opts, :count, 10000)
+
+    stream_ids_with_version =
+      Enum.map(stream_ids, fn
+        stream_id -> {stream_id, 0}
+      end)
+
+    read_streams_in_direction(stream_ids_with_version, :desc, limit)
+  end
 
   def append_to_stream(stream_id, events, expected_version \\ :any_version)
 
@@ -143,10 +169,16 @@ defmodule EventstoreSqlite do
     end)
   end
 
-  defp read_stream_in_direction(stream_id, asc_or_desc, limit, start_version) do
+  defp read_streams_in_direction(stream_ids_with_start_version, asc_or_desc, limit) do
+    where_conditions =
+      Enum.map(stream_ids_with_start_version, fn {stream_id, start_version} ->
+        dynamic([s], s.stream_id == ^stream_id and s.stream_version >= ^start_version)
+      end)
+      |> Enum.reduce(fn s, acc -> dynamic([], ^s or ^acc) end)
+
     query =
       from(s in "stream_events",
-        where: s.stream_id == ^stream_id and s.stream_version >= ^start_version,
+        where: ^where_conditions,
         join: event in Event,
         on: s.event_id == event.id,
         select: %{
@@ -154,6 +186,7 @@ defmodule EventstoreSqlite do
           type: event.type,
           data: event.data,
           created: event.inserted_at,
+          stream_id: s.stream_id,
           stream_version: s.stream_version
         },
         limit: ^limit,
@@ -165,7 +198,7 @@ defmodule EventstoreSqlite do
       EventstoreSqlite.RecordedEvent.parse(
         event.id,
         event.type,
-        stream_id,
+        event.stream_id,
         event.data,
         event.created,
         event.stream_version
