@@ -27,3 +27,6 @@ eventstore_sqlite-*.tar
 
 # sqlite databases
 *.db*
+
+# nix flake stuff
+.direnv
