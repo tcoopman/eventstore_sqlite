@@ -35,7 +35,8 @@ defmodule EventstoreSqlite.MixProject do
       {:jason, "~> 1.4"},
       {:mneme, ">= 0.0.0", only: [:dev, :test]},
       {:typed_struct, "~> 0.3.0"},
-      {:uniq, "~> 0.1"}
+      {:uniq, "~> 0.1"},
+      {:benchee, ">= 0.0.0", only: [:bench]}
     ]
   end
 
