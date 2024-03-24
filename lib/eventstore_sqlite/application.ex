@@ -5,7 +5,8 @@ defmodule EventstoreSqlite.Application do
 
   def start(_type, _args) do
     children = [
-      EventstoreSqlite.Repo
+      EventstoreSqlite.Repo,
+      {Registry, keys: :duplicate, name: EventstoreSqlite.Registry}
     ]
 
     opts = [strategy: :one_for_one, name: EventstoreSqlite.Supervisor]

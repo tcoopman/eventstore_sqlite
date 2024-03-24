@@ -66,10 +66,26 @@ defmodule EventstoreSqlite do
            |> insert_in_stream(stream_id)
            |> insert_in_stream(@all_stream_id)
            |> EventstoreSqlite.Repo.transaction() do
+      Task.async(fn ->
+        events = read_stream_forward("$all")
+
+        Registry.dispatch(EventstoreSqlite.Registry, "$all", fn entries ->
+          for {pid, _filter} <- entries do 
+            send(pid, {:events, events})
+          end
+        end)
+      end)
+      |> Task.await()
+
       :ok
     else
       {:error, _, :wrong_expected_version, _} -> {:error, :wrong_expected_version}
     end
+  end
+
+  def subscribe_to_stream(stream, filter \\ nil) do
+    {:ok, _} = Registry.register(EventstoreSqlite.Registry, stream, filter)
+    :ok
   end
 
   defp validate_version(multi, _stream_id, :any_version) do
