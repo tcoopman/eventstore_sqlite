@@ -84,10 +84,10 @@ defmodule EventstoreSqlite do
     end
   end
 
-  def subscribe_to_stream(stream, filter \\ nil) do
-    {:ok, _} = Registry.register(EventstoreSqlite.Registry, stream, filter)
-    :ok
-  end
+  # def subscribe_to_stream(stream, filter \\ nil) do
+  #   {:ok, _} = Registry.register(EventstoreSqlite.Registry, stream, filter)
+  #   :ok
+  # end
 
   defp validate_version(multi, _stream_id, :any_version) do
     multi

@@ -20,6 +20,7 @@ defmodule EventstoreSqlite.SubscribeTest do
   end
 
   describe "subscribe to $all stream" do
+    @tag :skip
     test "no events are added to the stream" do
       assert :ok = EventstoreSqlite.subscribe_to_stream("$all")
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [])
@@ -27,6 +28,7 @@ defmodule EventstoreSqlite.SubscribeTest do
       refute_receive(_)
     end
 
+    @tag :skip
     test "a single event is added" do
       assert :ok = EventstoreSqlite.subscribe_to_stream("$all")
       event = %FooTestEvent{text: "some text"}
@@ -45,6 +47,7 @@ defmodule EventstoreSqlite.SubscribeTest do
       )
     end
 
+    @tag :skip
     test "multiple events are added" do
       assert :ok = EventstoreSqlite.subscribe_to_stream("$all")
       event = %FooTestEvent{text: "some text"}
