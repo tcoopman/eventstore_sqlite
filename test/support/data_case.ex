@@ -18,8 +18,6 @@ defmodule EventstoreSqlite.DataCase do
 
   using do
     quote do
-      alias EventstoreSqlite.Repo
-
       import Ecto
       import Ecto.Changeset
       import Ecto.Query
@@ -36,10 +34,12 @@ defmodule EventstoreSqlite.DataCase do
   Sets up the sandbox based on the test tags.
   """
   def setup_sandbox(tags) do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(EventstoreSqlite.Repo, shared: not tags[:async])
+    pid_write = Ecto.Adapters.SQL.Sandbox.start_owner!(EventstoreSqlite.RepoWrite, shared: not tags[:async])
+    pid_read = Ecto.Adapters.SQL.Sandbox.start_owner!(EventstoreSqlite.RepoRead, shared: not tags[:async])
 
     on_exit(fn ->
-      Ecto.Adapters.SQL.Sandbox.stop_owner(pid)
+      Ecto.Adapters.SQL.Sandbox.stop_owner(pid_read)
+      Ecto.Adapters.SQL.Sandbox.stop_owner(pid_write)
     end)
   end
 

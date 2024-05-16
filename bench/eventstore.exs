@@ -57,7 +57,7 @@
 # Number of Available Cores: 32
 # Available memory: 62.72 GB
 # Elixir 1.16.2
-# Erlang 26.2.4
+# Erlang 26.2.5
 # JIT enabled: true
 
 # Benchmark suite executing with the following configuration:
@@ -79,20 +79,20 @@
 # Formatting results...
 
 # Name                           ips        average  deviation         median         99th %
-# read forward 10              27.58       36.26 ms     ±1.33%       36.20 ms       37.63 ms
-# read forward 100             27.48       36.39 ms     ±1.09%       36.36 ms       37.77 ms
-# read backward 10             14.86       67.28 ms     ±1.55%       67.15 ms       70.98 ms
-# read forward 10_000          13.33       75.02 ms     ±5.43%       73.57 ms       84.68 ms
-# read backward 100             7.38      135.57 ms     ±1.06%      135.45 ms      139.05 ms
-# read backward 10_000          5.45      183.60 ms     ±1.59%      183.26 ms      200.47 ms
+# read forward 10              75.55       13.24 ms     ±2.44%       13.23 ms       13.94 ms
+# read forward 100             71.79       13.93 ms     ±4.04%       13.86 ms       15.47 ms
+# read backward 10             40.86       24.47 ms     ±4.16%       24.26 ms       27.03 ms
+# read backward 100            20.47       48.86 ms     ±1.18%       48.88 ms       50.38 ms
+# read forward 10_000          17.65       56.66 ms     ±3.58%       56.63 ms       60.42 ms
+# read backward 10_000         10.55       94.78 ms     ±2.85%       94.78 ms      100.28 ms
 
 # Comparison:
-# read forward 10              27.58
-# read forward 100             27.48 - 1.00x slower +0.134 ms
-# read backward 10             14.86 - 1.86x slower +31.02 ms
-# read forward 10_000          13.33 - 2.07x slower +38.76 ms
-# read backward 100             7.38 - 3.74x slower +99.31 ms
-# read backward 10_000          5.45 - 5.06x slower +147.34 ms
+# read forward 10              75.55
+# read forward 100             71.79 - 1.05x slower +0.69 ms
+# read backward 10             40.86 - 1.85x slower +11.24 ms
+# read backward 100            20.47 - 3.69x slower +35.62 ms
+# read forward 10_000          17.65 - 4.28x slower +43.42 ms
+# read backward 10_000         10.55 - 7.16x slower +81.55 ms
 
 # Memory usage statistics:
 
@@ -100,12 +100,11 @@
 # read forward 10             42.43 KB
 # read forward 100           284.55 KB - 6.71x memory usage +242.13 KB
 # read backward 10            42.43 KB - 1.00x memory usage +0 KB
-# read forward 10_000      29178.62 KB - 687.69x memory usage +29136.19 KB
 # read backward 100          284.55 KB - 6.71x memory usage +242.13 KB
-# read backward 10_000     29178.62 KB - 687.69x memory usage +29136.19 KB
+# read forward 10_000      29178.52 KB - 687.69x memory usage +29136.09 KB
+# read backward 10_000     29178.56 KB - 687.69x memory usage +29136.13 KB
 
 # **All measurements for memory usage were the same**
-
 use TypedStruct
 
 typedstruct module: FooTestEvent do
@@ -161,4 +160,5 @@ defmodule Bench do
   end
 end
 
-Bench.reading()
+# Bench.reading()
+Bench.writing()

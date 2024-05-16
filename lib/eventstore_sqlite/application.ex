@@ -5,7 +5,8 @@ defmodule EventstoreSqlite.Application do
 
   def start(_type, _args) do
     children = [
-      EventstoreSqlite.Repo,
+      EventstoreSqlite.RepoWrite,
+      EventstoreSqlite.RepoRead,
       {Registry, keys: :duplicate, name: EventstoreSqlite.Registry}
     ]
 

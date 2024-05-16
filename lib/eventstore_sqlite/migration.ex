@@ -7,7 +7,7 @@ defmodule EventstoreSqlite.Migration do
       |> delete_all()
       |> fill_all()
       |> update_streams()
-      |> EventstoreSqlite.Repo.transaction()
+      |> EventstoreSqlite.RepoWrite.transaction()
   end
 
   defp delete_all(multi) do
