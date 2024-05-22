@@ -33,13 +33,11 @@ defmodule EventstoreSqlite.DataCase do
   @doc """
   Sets up the sandbox based on the test tags.
   """
-  def setup_sandbox(tags) do
-    pid_write = Ecto.Adapters.SQL.Sandbox.start_owner!(EventstoreSqlite.RepoWrite, shared: not tags[:async])
-    pid_read = Ecto.Adapters.SQL.Sandbox.start_owner!(EventstoreSqlite.RepoRead, shared: not tags[:async])
+  def setup_sandbox(_tags) do
+    System.cmd("sqlite3", ["test.db", ".backup 'old.test.db'"])
 
     on_exit(fn ->
-      Ecto.Adapters.SQL.Sandbox.stop_owner(pid_read)
-      Ecto.Adapters.SQL.Sandbox.stop_owner(pid_write)
+      System.cmd("sqlite3", ["old.test.db", ".backup 'test.db'"])
     end)
   end
 
