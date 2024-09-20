@@ -87,9 +87,7 @@ defmodule EventstoreSqliteTest do
 
   describe "read_stream_forward" do
     test "stream does not exist" do
-      auto_assert(
-        [] <- EventstoreSqlite.read_stream_forward("does-not-exist", count: 1)
-      )
+      auto_assert([] <- EventstoreSqlite.read_stream_forward("does-not-exist", count: 1))
     end
 
     test "1 event" do

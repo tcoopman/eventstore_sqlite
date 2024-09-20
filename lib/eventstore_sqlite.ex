@@ -66,17 +66,7 @@ defmodule EventstoreSqlite do
            |> insert_in_stream(stream_id)
            |> insert_in_stream(@all_stream_id)
            |> EventstoreSqlite.RepoWrite.transaction(mode: :immediate) do
-      # This is way too slow
-      # Task.async(fn ->
-      #   events = read_stream_forward("$all")
-
-      #   Registry.dispatch(EventstoreSqlite.Registry, "$all", fn entries ->
-      #     for {pid, _filter} <- entries do 
-      #       send(pid, {:events, events})
-      #     end
-      #   end)
-      # end)
-      # |> Task.await()
+      :ok = EventstoreSqlite.Subscriptions.ping(stream_id)
 
       :ok
     else
@@ -84,10 +74,9 @@ defmodule EventstoreSqlite do
     end
   end
 
-  # def subscribe_to_stream(stream, filter \\ nil) do
-  #   {:ok, _} = Registry.register(EventstoreSqlite.Registry, stream, filter)
-  #   :ok
-  # end
+  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil) do
+    EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter)
+  end
 
   defp validate_version(multi, _stream_id, :any_version) do
     multi
