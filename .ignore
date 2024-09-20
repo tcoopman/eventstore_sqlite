@@ -24,3 +24,7 @@ eventstore_sqlite-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+.direnv
+.elixir_ls
+.lexical
