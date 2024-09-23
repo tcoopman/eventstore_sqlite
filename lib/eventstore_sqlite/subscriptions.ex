@@ -59,11 +59,14 @@ defmodule EventstoreSqlite.Subscriptions do
   end
 
   defp update_streams_to_handle(state, stream) do
-    case :queue.member(stream, state.streams_to_handle) do
-      true ->
+    cond do
+      Map.has_key?(state.subscribers, stream) == false ->
         state
 
-      false ->
+      :queue.member(stream, state.streams_to_handle) ->
+        state
+
+      true ->
         %{state | streams_to_handle: :queue.in(stream, state.streams_to_handle)}
     end
   end
@@ -88,7 +91,7 @@ defmodule EventstoreSqlite.Subscriptions do
 
   defp send_to_stream(state, stream) do
     version_to_read = Map.get(state.subscribed_streams, stream, 0)
-    events = EventstoreSqlite.read_stream_forward(stream, start_version: version_to_read)
+    events = EventstoreSqlite.read_stream_forward({stream, version_to_read})
 
     new_version_to_read =
       case List.last(events) do

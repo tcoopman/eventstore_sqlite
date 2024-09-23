@@ -7,7 +7,7 @@ defmodule EventstoreSqlite.Application do
     children = [
       EventstoreSqlite.RepoWrite,
       EventstoreSqlite.RepoRead,
-      EventstoreSqlite.Subscriptions,
+      EventstoreSqlite.Subscriptions
     ]
 
     opts = [strategy: :one_for_one, name: EventstoreSqlite.Supervisor]
