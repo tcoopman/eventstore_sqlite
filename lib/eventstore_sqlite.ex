@@ -78,6 +78,19 @@ defmodule EventstoreSqlite do
     EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter)
   end
 
+  @doc """
+  Lists all streams in the eventstore
+  """
+  def list_streams() do
+    query =
+      from(stream in "streams",
+        select: stream.stream_id,
+        order_by: [{:asc, stream.stream_id}]
+      )
+
+    EventstoreSqlite.RepoRead.all(query)
+  end
+
   defp validate_version(multi, _stream_id, :any_version) do
     multi
   end

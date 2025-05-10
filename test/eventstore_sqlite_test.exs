@@ -525,4 +525,19 @@ defmodule EventstoreSqliteTest do
       )
     end
   end
+
+  describe "list_streams/0" do
+    test "no streams" do
+      auto_assert([] <- EventstoreSqlite.list_streams())
+    end
+
+    test "multiple streams" do
+      event_1 = %FooTestEvent{text: "1"}
+      event_2 = %FooTestEvent{text: "2"}
+      :ok = EventstoreSqlite.append_to_stream("stream-1", [event_1])
+      :ok = EventstoreSqlite.append_to_stream("stream-2", [event_2])
+
+      auto_assert(["$all", "stream-1", "stream-2"] <- EventstoreSqlite.list_streams())
+    end
+  end
 end
