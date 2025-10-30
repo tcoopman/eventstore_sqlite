@@ -87,7 +87,7 @@ defmodule EventstoreSqliteTest do
 
   describe "read_stream_forward" do
     test "stream does not exist" do
-      auto_assert([] <- EventstoreSqlite.read_stream_forward("does-not-exist", count: 1))
+      auto_assert([] <- stream_forward("does-not-exist", count: 1))
     end
 
     test "1 event" do
@@ -106,7 +106,7 @@ defmodule EventstoreSqliteTest do
           }
         ]
         when is_struct(date, DateTime) <-
-          EventstoreSqlite.read_stream_forward({stream_id, 0}, count: 1)
+          stream_forward({stream_id, 0}, count: 1)
       )
     end
 
@@ -122,7 +122,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %FooTestEvent{text: "some text"}
           }
-        ] <- EventstoreSqlite.read_stream_forward(stream_id, count: 1)
+        ] <- stream_forward(stream_id, count: 1)
       )
     end
 
@@ -141,10 +141,10 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %FooTestEvent{text: "3"}
           }
-        ] <- EventstoreSqlite.read_stream_forward({stream_id, 1})
+        ] <- stream_forward({stream_id, 1})
       )
 
-      auto_assert([] <- EventstoreSqlite.read_stream_forward("empty-stream"))
+      auto_assert([] <- stream_forward("empty-stream"))
     end
 
     test "handles nested structures" do
@@ -156,7 +156,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %ComplexEvent{complex: %Complex{c: "complex"}}
           }
-        ] <- EventstoreSqlite.read_stream_forward("test-stream-1")
+        ] <- stream_forward("test-stream-1")
       )
     end
 
@@ -183,7 +183,7 @@ defmodule EventstoreSqliteTest do
             data: ^event_3,
             stream_id: ^stream_id_2
           }
-        ] <- EventstoreSqlite.read_stream_forward([stream_id_1, stream_id_2])
+        ] <- stream_forward([stream_id_1, stream_id_2])
       )
     end
 
@@ -216,7 +216,7 @@ defmodule EventstoreSqliteTest do
             data: ^event_4,
             stream_id: ^stream_id_1
           }
-        ] <- EventstoreSqlite.read_stream_forward([stream_id_1, stream_id_2])
+        ] <- stream_forward([stream_id_1, stream_id_2])
       )
     end
 
@@ -266,7 +266,7 @@ defmodule EventstoreSqliteTest do
             stream_id: "$all",
             stream_version: 3
           }
-        ] <- EventstoreSqlite.read_stream_forward([stream_id_1, "$all"])
+        ] <- stream_forward([stream_id_1, "$all"])
       )
     end
 
@@ -309,7 +309,7 @@ defmodule EventstoreSqliteTest do
             stream_id: ^stream_id_1,
             stream_version: 3
           }
-        ] <- EventstoreSqlite.read_stream_forward([{stream_id_1, 1}, {stream_id_2, 2}])
+        ] <- stream_forward([{stream_id_1, 1}, {stream_id_2, 2}])
       )
     end
 
@@ -342,14 +342,14 @@ defmodule EventstoreSqliteTest do
             data: %FooTestEvent{text: "3"},
             type: "Elixir.EventstoreSqliteTest.FooTestEvent"
           }
-        ] <- EventstoreSqlite.read_stream_forward("$all")
+        ] <- stream_forward("$all")
       )
     end
   end
 
   describe "read_stream_backward" do
     test "stream does not exist" do
-      auto_assert([] <- EventstoreSqlite.read_stream_backward("does-not-exist", count: 1))
+      auto_assert([] <- stream_backward("does-not-exist", count: 1))
     end
 
     test "1 event" do
@@ -368,7 +368,7 @@ defmodule EventstoreSqliteTest do
           }
         ]
         when is_struct(date, DateTime) <-
-          EventstoreSqlite.read_stream_backward(stream_id, count: 1)
+          stream_backward(stream_id, count: 1)
       )
     end
 
@@ -384,7 +384,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "3"}},
           %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "2"}},
           %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "1"}}
-        ] <- EventstoreSqlite.read_stream_backward(stream_id)
+        ] <- stream_backward(stream_id)
       )
     end
 
@@ -400,7 +400,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %FooTestEvent{text: "3"}
           }
-        ] <- EventstoreSqlite.read_stream_backward(stream_id, count: 1)
+        ] <- stream_backward(stream_id, count: 1)
       )
     end
 
@@ -413,7 +413,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{
             data: %ComplexEvent{complex: %Complex{c: "complex"}}
           }
-        ] <- EventstoreSqlite.read_stream_backward("test-stream-1")
+        ] <- stream_backward("test-stream-1")
       )
     end
 
@@ -431,7 +431,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: ^stream_id_2},
           %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: ^stream_id_1},
           %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: ^stream_id_1}
-        ] <- EventstoreSqlite.read_stream_backward([stream_id_1, stream_id_2])
+        ] <- stream_backward([stream_id_1, stream_id_2])
       )
     end
 
@@ -452,7 +452,7 @@ defmodule EventstoreSqliteTest do
           %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: ^stream_id_2},
           %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: ^stream_id_1},
           %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: ^stream_id_1}
-        ] <- EventstoreSqlite.read_stream_backward([stream_id_1, stream_id_2])
+        ] <- stream_backward([stream_id_1, stream_id_2])
       )
     end
 
@@ -488,7 +488,7 @@ defmodule EventstoreSqliteTest do
             stream_id: ^stream_id_1,
             stream_version: 0
           }
-        ] <- EventstoreSqlite.read_stream_backward([stream_id_1, "$all"])
+        ] <- stream_backward([stream_id_1, "$all"])
       )
     end
 
@@ -521,7 +521,7 @@ defmodule EventstoreSqliteTest do
             data: %FooTestEvent{text: "1"},
             type: "Elixir.EventstoreSqliteTest.FooTestEvent"
           }
-        ] <- EventstoreSqlite.read_stream_backward("$all")
+        ] <- stream_backward("$all")
       )
     end
   end
@@ -539,5 +539,13 @@ defmodule EventstoreSqliteTest do
 
       auto_assert(["$all", "stream-1", "stream-2"] <- EventstoreSqlite.list_streams())
     end
+  end
+
+  defp stream_forward(stream_id, opts \\ []) do
+    EventstoreSqlite.stream_forward(stream_id, opts) |> Enum.to_list()
+  end
+
+  defp stream_backward(stream_id, opts \\ []) do
+    EventstoreSqlite.stream_backward(stream_id, opts) |> Enum.to_list()
   end
 end

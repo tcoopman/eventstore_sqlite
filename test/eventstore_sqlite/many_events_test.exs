@@ -19,23 +19,23 @@ defmodule EventstoreSqlite.ManyEventsTest do
   end
 
   setup do
-    insert_many("A", 1_000)
-    insert_many("B", 1_000)
-    insert_many("C", 1_000)
-    insert_many("D", 1_000)
-    insert_many("E", 1_000)
-    insert_many("A", 1_000)
-    insert_many("B", 1_000)
-    insert_many("C", 1_000)
-    insert_many("D", 1_000)
-    insert_many("E", 1_000)
+    insert_many("A", 3_000)
+    insert_many("B", 3_000)
+    insert_many("C", 3_000)
+    insert_many("D", 3_000)
+    insert_many("E", 3_000)
+    insert_many("A", 3_000)
+    insert_many("B", 3_000)
+    insert_many("C", 3_000)
+    insert_many("D", 3_000)
+    insert_many("E", 3_000)
     :ok
   end
 
   describe "read_stream_forward" do
-    test "sanity" do
+    test "sanity with limit" do
       all = EventstoreSqlite.read_stream_forward("$all", count: 20_000)
-      auto_assert(10000 <- Enum.count(all))
+      auto_assert(20000 <- Enum.count(all))
     end
 
     test "first 2" do
@@ -61,12 +61,12 @@ defmodule EventstoreSqlite.ManyEventsTest do
       auto_assert(
         [
           %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "event: 999"},
+            data: %FooTestEvent{text: "event: 2999"},
             stream_id: "$all",
-            stream_version: 9999,
+            stream_version: 29999,
             type: "Elixir.EventstoreSqlite.ManyEventsTest.FooTestEvent"
           }
-        ] <- EventstoreSqlite.read_stream_forward({"$all", 9999}, count: 2)
+        ] <- EventstoreSqlite.read_stream_forward({"$all", 3_000 * 10 - 1}, count: 2)
       )
     end
   end

@@ -1,27 +1,30 @@
 defmodule EventstoreSqlite do
-  import Ecto.Query, only: [from: 2, dynamic: 2]
+  import Ecto.Query, only: [from: 2]
 
-  alias EventstoreSqlite.{Stream}
   alias EventstoreSqlite.Event
+  alias EventstoreSqlite.Reader
 
   @all_stream_id "$all"
+  @default_count 10_000
+  @default_chunk_size 1_000
 
-  def read_stream_forward(stream_id, opts \\ [])
+  def stream_forward(stream_id, opts \\ [])
+  def stream_forward(stream_id, opts) when is_binary(stream_id) do
+    limit = Keyword.get(opts, :count, @default_count)
 
-  def read_stream_forward(stream_id, opts) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, 10_000)
-
-    read_streams_in_direction([{stream_id, 0}], :asc, limit)
+    Reader.stream([{stream_id, 0}], :asc, @default_chunk_size, limit)
+    |> Stream.flat_map(& &1)
   end
 
-  def read_stream_forward({stream_id, start_version}, opts) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, 10_000)
+  def stream_forward({stream_id, start_version}, opts) when is_binary(stream_id) do
+    limit = Keyword.get(opts, :count, @default_count)
 
-    read_streams_in_direction([{stream_id, start_version}], :asc, limit)
+    Reader.stream([{stream_id, start_version}], :asc, @default_chunk_size, limit)
+    |> Stream.flat_map(& &1)
   end
 
-  def read_stream_forward(stream_ids, opts) when is_list(stream_ids) do
-    limit = Keyword.get(opts, :count, 10_000)
+  def stream_forward(stream_ids, opts) when is_list(stream_ids) do
+    limit = Keyword.get(opts, :count, @default_count)
 
     stream_ids_with_version =
       Enum.map(stream_ids, fn
@@ -29,26 +32,37 @@ defmodule EventstoreSqlite do
         stream_id -> {stream_id, 0}
       end)
 
-    read_streams_in_direction(stream_ids_with_version, :asc, limit)
+    Reader.stream(stream_ids_with_version, :asc, @default_chunk_size, limit)
+    |> Stream.flat_map(& &1)
   end
 
-  def read_stream_backward(stream_id, opts \\ [])
+  def stream_backward(stream_id, opts \\ [])
 
-  def read_stream_backward(stream_id, opts) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, 10000)
+  def stream_backward(stream_id, opts) when is_binary(stream_id) do
+    limit = Keyword.get(opts, :count, @default_count)
 
-    read_streams_in_direction([{stream_id, 0}], :desc, limit)
+    Reader.stream([{stream_id, 0}], :desc, @default_chunk_size, limit)
+    |> Stream.flat_map(& &1)
   end
 
-  def read_stream_backward(stream_ids, opts) when is_list(stream_ids) do
-    limit = Keyword.get(opts, :count, 10000)
+  def stream_backward(stream_ids, opts) when is_list(stream_ids) do
+    limit = Keyword.get(opts, :count, @default_count)
 
     stream_ids_with_version =
       Enum.map(stream_ids, fn
         stream_id -> {stream_id, 0}
       end)
 
-    read_streams_in_direction(stream_ids_with_version, :desc, limit)
+    Reader.stream(stream_ids_with_version, :desc, @default_chunk_size, limit)
+    |> Stream.flat_map(& &1)
+  end
+
+  def read_stream_forward(stream_id, opts \\ []) do
+    stream_forward(stream_id, opts) |> Enum.to_list()
+  end
+
+  def read_stream_backward(stream_id, opts) when is_binary(stream_id) do
+    stream_backward(stream_id, opts) |> Enum.to_list()
   end
 
   def append_to_stream(stream_id, events, expected_version \\ :any_version)
@@ -99,7 +113,7 @@ defmodule EventstoreSqlite do
        when expected_version == :no_stream or expected_version == {:version, 0} do
     multi
     |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
-      unless repo.exists?(from(stream in Stream, where: stream.stream_id == ^stream_id)) do
+      unless repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
         {:ok, nil}
       else
         {:error, :wrong_expected_version}
@@ -110,7 +124,7 @@ defmodule EventstoreSqlite do
   defp validate_version(multi, stream_id, :stream_exists) do
     multi
     |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
-      if repo.exists?(from(stream in Stream, where: stream.stream_id == ^stream_id)) do
+      if repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
         {:ok, nil}
       else
         {:error, :wrong_expected_version}
@@ -122,7 +136,7 @@ defmodule EventstoreSqlite do
     multi
     |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
       if repo.exists?(
-           from(stream in Stream,
+           from(stream in EventstoreSqlite.Stream,
              where: stream.stream_id == ^stream_id and stream.stream_version == ^version
            )
          ) do
@@ -147,8 +161,8 @@ defmodule EventstoreSqlite do
     multi
     |> Ecto.Multi.run({:stream, stream_id}, fn repo, _changes ->
       {:ok,
-       repo.one(from(stream in Stream, where: stream.stream_id == ^stream_id)) ||
-         %Stream{stream_id: stream_id, stream_version: 0}}
+       repo.one(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) ||
+         %EventstoreSqlite.Stream{stream_id: stream_id, stream_version: 0}}
     end)
     |> Ecto.Multi.insert_or_update({:insert_stream, stream_id}, fn %{
                                                                      :insert_events =>
@@ -190,43 +204,6 @@ defmodule EventstoreSqlite do
       """
 
       Ecto.Adapters.SQL.query(repo, query, [stream.stream_version])
-    end)
-  end
-
-  defp read_streams_in_direction(stream_ids_with_start_version, asc_or_desc, limit) do
-    where_conditions =
-      Enum.map(stream_ids_with_start_version, fn {stream_id, start_version} ->
-        dynamic([s], s.stream_id == ^stream_id and s.stream_version >= ^start_version)
-      end)
-      |> Enum.reduce(fn s, acc -> dynamic([], ^s or ^acc) end)
-
-    query =
-      from(s in "stream_events",
-        where: ^where_conditions,
-        join: event in Event,
-        on: s.event_id == event.id,
-        select: %{
-          id: event.id,
-          type: event.type,
-          data: event.data,
-          created: event.inserted_at,
-          stream_id: s.stream_id,
-          stream_version: s.stream_version
-        },
-        limit: ^limit,
-        order_by: [{^asc_or_desc, s.id}]
-      )
-
-    EventstoreSqlite.RepoRead.all(query)
-    |> Enum.map(fn event ->
-      EventstoreSqlite.RecordedEvent.parse(
-        event.id,
-        event.type,
-        event.stream_id,
-        event.data,
-        event.created,
-        event.stream_version
-      )
     end)
   end
 end
