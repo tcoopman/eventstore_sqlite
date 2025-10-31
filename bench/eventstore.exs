@@ -158,7 +158,27 @@ defmodule Bench do
       memory_time: 2
     )
   end
+
+  def stream_vs_read do
+    event1 = %FooTestEvent{text: "bar"}
+    event2 = %Complex{c: "bar"}
+
+    events = [event1, event2]
+
+    IO.inspect("Inserting 20K events ...")
+    Enum.to_list(1..20_000) |> Enum.map(fn _ -> EventstoreSqlite.append_to_stream("test", events) end) 
+
+    Benchee.run(
+      %{
+        "read forward 10_000" => fn -> EventstoreSqlite.read_stream_forward("test", count: 10_000) end,
+        "stream forward 10_000" => fn -> EventstoreSqlite.stream_forward("test", count: 10_000) end,
+      },
+      time: 10,
+      memory_time: 2
+    )
+  end
 end
 
 # Bench.reading()
-Bench.writing()
+# Bench.writing()
+Bench.stream_vs_read()
