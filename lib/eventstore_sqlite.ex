@@ -9,18 +9,17 @@ defmodule EventstoreSqlite do
   @default_chunk_size 1_000
 
   def stream_forward(stream_id, opts \\ [])
+
   def stream_forward(stream_id, opts) when is_binary(stream_id) do
     limit = Keyword.get(opts, :count, @default_count)
 
     Reader.stream([{stream_id, 0}], :asc, @default_chunk_size, limit)
-    |> Stream.flat_map(& &1)
   end
 
   def stream_forward({stream_id, start_version}, opts) when is_binary(stream_id) do
     limit = Keyword.get(opts, :count, @default_count)
 
     Reader.stream([{stream_id, start_version}], :asc, @default_chunk_size, limit)
-    |> Stream.flat_map(& &1)
   end
 
   def stream_forward(stream_ids, opts) when is_list(stream_ids) do
@@ -33,7 +32,6 @@ defmodule EventstoreSqlite do
       end)
 
     Reader.stream(stream_ids_with_version, :asc, @default_chunk_size, limit)
-    |> Stream.flat_map(& &1)
   end
 
   def stream_backward(stream_id, opts \\ [])
@@ -42,7 +40,6 @@ defmodule EventstoreSqlite do
     limit = Keyword.get(opts, :count, @default_count)
 
     Reader.stream([{stream_id, 0}], :desc, @default_chunk_size, limit)
-    |> Stream.flat_map(& &1)
   end
 
   def stream_backward(stream_ids, opts) when is_list(stream_ids) do
@@ -54,7 +51,6 @@ defmodule EventstoreSqlite do
       end)
 
     Reader.stream(stream_ids_with_version, :desc, @default_chunk_size, limit)
-    |> Stream.flat_map(& &1)
   end
 
   def read_stream_forward(stream_id, opts \\ []) do
@@ -113,7 +109,9 @@ defmodule EventstoreSqlite do
        when expected_version == :no_stream or expected_version == {:version, 0} do
     multi
     |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
-      unless repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
+      unless repo.exists?(
+               from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)
+             ) do
         {:ok, nil}
       else
         {:error, :wrong_expected_version}
@@ -124,7 +122,9 @@ defmodule EventstoreSqlite do
   defp validate_version(multi, stream_id, :stream_exists) do
     multi
     |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
-      if repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
+      if repo.exists?(
+           from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)
+         ) do
         {:ok, nil}
       else
         {:error, :wrong_expected_version}

@@ -2,6 +2,7 @@ defmodule EventstoreSqlite.Reader do
   import Ecto.Query, only: [from: 2, dynamic: 2]
 
   alias EventstoreSqlite.Event
+
   @doc """
   Returns a lazy stream of events in chunks, stopping after a total maximum limit.
 
@@ -16,14 +17,15 @@ defmodule EventstoreSqlite.Reader do
         asc_or_desc,
         chunk_size,
         max_limit \\ nil
-      ) when asc_or_desc in [:asc, :desc] and is_integer(chunk_size) and chunk_size > 0 do
+      )
+      when asc_or_desc in [:asc, :desc] and is_integer(chunk_size) and chunk_size > 0 do
     initial_state = {nil, 0}
 
     Stream.unfold(initial_state, fn
       {cursor, count_so_far} ->
         cond do
           max_limit && count_so_far >= max_limit ->
-            nil 
+            nil
 
           true ->
             limit_for_query =
@@ -45,7 +47,7 @@ defmodule EventstoreSqlite.Reader do
               next_state = {next_cursor, new_count}
 
               parsed_chunk =
-                Enum.map(raw_chunk, fn event_map ->
+                Stream.map(raw_chunk, fn event_map ->
                   EventstoreSqlite.RecordedEvent.parse(
                     event_map.id,
                     event_map.type,
@@ -60,6 +62,7 @@ defmodule EventstoreSqlite.Reader do
             end
         end
     end)
+    |> Stream.flat_map(& &1)
   end
 
   defp fetch_chunk(stream_ids_with_start_version, asc_or_desc, limit, cursor) do

@@ -19,8 +19,8 @@ defmodule EventstoreSqlite.ReaderTest do
         %FooTestEvent{
           text: "event: #{i}"
         }
-
       end
+
     assert :ok = EventstoreSqlite.append_to_stream(@stream_id, events)
 
     {:ok, all_events: events}
@@ -42,24 +42,13 @@ defmodule EventstoreSqlite.ReaderTest do
       chunk_size = 10
       streams_to_read = [{@stream_id, 0}]
 
-      # The function returns a stream of chunks. Let's realize it into a list of lists.
       result_chunks =
         Reader.stream(streams_to_read, :asc, chunk_size)
         |> Enum.to_list()
 
-      # Assertions for the chunks themselves
-      assert length(result_chunks) == 3 # 10 + 10 + 5 = 25
-      assert length(Enum.at(result_chunks, 0)) == 10
-      assert length(Enum.at(result_chunks, 1)) == 10
-      assert length(Enum.at(result_chunks, 2)) == 5
-
-      # Flatten the chunks to get all returned events in order
       all_returned_events = List.flatten(result_chunks)
 
-      # Assert that the total count is correct
       assert length(all_returned_events) == @total_events
-
-
       assert all_returned_events |> Enum.map(& &1.data) == all_events
     end
 
@@ -71,31 +60,23 @@ defmodule EventstoreSqlite.ReaderTest do
         Reader.stream(streams_to_read, :desc, chunk_size)
         |> Enum.to_list()
 
-      # Assertions for chunks: 25 events in chunks of 8 -> 8, 8, 8, 1
-      assert length(result_chunks) == 4
-      assert length(Enum.at(result_chunks, 0)) == 8
-      assert length(Enum.at(result_chunks, 3)) == 1
-
       all_returned_events = List.flatten(result_chunks)
       assert length(all_returned_events) == @total_events
 
-      # For descending order, the expected result is the reverse
       expected_events = all_events |> Enum.reverse()
-
       assert all_returned_events |> Enum.map(& &1.data) == expected_events
     end
 
     test "returns one chunk when chunk size is larger than total events" do
-      chunk_size = 100 # Much larger than @total_events (25)
+      # Much larger than @total_events (25)
+      chunk_size = 100
       streams_to_read = [{@stream_id, 0}]
 
       result_chunks =
         Reader.stream(streams_to_read, :asc, chunk_size)
         |> Enum.to_list()
 
-      # We expect a single chunk containing all events
-      assert length(result_chunks) == 1
-      assert length(Enum.at(result_chunks, 0)) == @total_events
+      assert length(result_chunks) == @total_events
     end
 
     test "returns an empty list when no events match" do
