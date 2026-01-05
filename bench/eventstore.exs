@@ -172,6 +172,8 @@ defmodule Bench do
       %{
         "read forward 10_000" => fn -> EventstoreSqlite.read_stream_forward("test", count: 10_000) end,
         "stream forward 10_000" => fn -> EventstoreSqlite.stream_forward("test", count: 10_000) end,
+        "stream forward 10_000 and start the stream" => fn -> EventstoreSqlite.stream_forward("test", count: 10_000) |> Enum.take(1) end,
+        "stream forward 10_000 and get part of the stream" => fn -> EventstoreSqlite.stream_forward("test", count: 10_000) |> Enum.take(200) end,
       },
       time: 10,
       memory_time: 2
