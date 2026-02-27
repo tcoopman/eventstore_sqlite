@@ -14,14 +14,14 @@ config :eventstore_sqlite, EventstoreSqlite.RepoWrite,
   pool_size: 1,
   journal_mode: :wal,
   synchronous: :normal,
-  cache_size: 1_000_000_000,
+  cache_size: -2_000,
   busy_timeout: 5_000
 
 config :eventstore_sqlite, EventstoreSqlite.RepoRead,
   pool_size: 5,
   journal_mode: :wal,
   synchronous: :normal,
-  cache_size: 1_000_000_000,
+  cache_size: -2_000,
   busy_timeout: 5_000
 
 # Configures Elixir's Logger
