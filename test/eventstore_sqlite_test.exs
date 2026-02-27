@@ -1,6 +1,5 @@
 defmodule EventstoreSqliteTest do
   use ExUnit.Case
-
   use Mneme
   use EventstoreSqlite.DataCase
   use TypedStruct
@@ -542,10 +541,10 @@ defmodule EventstoreSqliteTest do
   end
 
   defp stream_forward(stream_id, opts \\ []) do
-    EventstoreSqlite.stream_forward(stream_id, opts) |> Enum.to_list()
+    stream_id |> EventstoreSqlite.stream_forward(opts) |> Enum.to_list()
   end
 
   defp stream_backward(stream_id, opts \\ []) do
-    EventstoreSqlite.stream_backward(stream_id, opts) |> Enum.to_list()
+    stream_id |> EventstoreSqlite.stream_backward(opts) |> Enum.to_list()
   end
 end

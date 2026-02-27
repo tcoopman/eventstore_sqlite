@@ -33,7 +33,7 @@ defmodule EventstoreSqlite.DataCase do
   @doc """
   Sets up the sandbox based on the test tags.
   """
-  def setup_sandbox() do
+  def setup_sandbox do
     System.cmd("sqlite3", ["test.db", ".backup 'old.test.db'"])
 
     on_exit(fn ->

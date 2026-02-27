@@ -1,4 +1,5 @@
 defmodule EventstoreSqlite.Reader do
+  @moduledoc false
   import Ecto.Query, only: [from: 2, dynamic: 2]
 
   alias EventstoreSqlite.Event
@@ -12,54 +13,48 @@ defmodule EventstoreSqlite.Reader do
   - `max_limit`: An optional integer. The stream will stop after emitting this
     many total events. If `nil`, it will stream until the end.
   """
-  def stream(
-        stream_ids_with_start_version,
-        asc_or_desc,
-        chunk_size,
-        max_limit \\ nil
-      )
+  def stream(stream_ids_with_start_version, asc_or_desc, chunk_size, max_limit \\ nil)
       when asc_or_desc in [:asc, :desc] and is_integer(chunk_size) and chunk_size > 0 do
     initial_state = {nil, 0}
 
-    Stream.unfold(initial_state, fn
+    initial_state
+    |> Stream.unfold(fn
       {cursor, count_so_far} ->
-        cond do
-          max_limit && count_so_far >= max_limit ->
-            nil
-
-          true ->
-            limit_for_query =
-              if max_limit do
-                min(chunk_size, max_limit - count_so_far)
-              else
-                chunk_size
-              end
-
-            raw_chunk =
-              fetch_chunk(stream_ids_with_start_version, asc_or_desc, limit_for_query, cursor)
-
-            if raw_chunk == [] do
-              nil
+        if max_limit && count_so_far >= max_limit do
+          nil
+        else
+          limit_for_query =
+            if max_limit do
+              min(chunk_size, max_limit - count_so_far)
             else
-              next_cursor = List.last(raw_chunk).stream_event_id
-              new_count = count_so_far + length(raw_chunk)
-
-              next_state = {next_cursor, new_count}
-
-              parsed_chunk =
-                Stream.map(raw_chunk, fn event_map ->
-                  EventstoreSqlite.RecordedEvent.parse(
-                    event_map.id,
-                    event_map.type,
-                    event_map.stream_id,
-                    event_map.data,
-                    event_map.created,
-                    event_map.stream_version
-                  )
-                end)
-
-              {parsed_chunk, next_state}
+              chunk_size
             end
+
+          raw_chunk =
+            fetch_chunk(stream_ids_with_start_version, asc_or_desc, limit_for_query, cursor)
+
+          if raw_chunk == [] do
+            nil
+          else
+            next_cursor = List.last(raw_chunk).stream_event_id
+            new_count = count_so_far + length(raw_chunk)
+
+            next_state = {next_cursor, new_count}
+
+            parsed_chunk =
+              Stream.map(raw_chunk, fn event_map ->
+                EventstoreSqlite.RecordedEvent.parse(
+                  event_map.id,
+                  event_map.type,
+                  event_map.stream_id,
+                  event_map.data,
+                  event_map.created,
+                  event_map.stream_version
+                )
+              end)
+
+            {parsed_chunk, next_state}
+          end
         end
     end)
     |> Stream.flat_map(& &1)
@@ -67,7 +62,8 @@ defmodule EventstoreSqlite.Reader do
 
   defp fetch_chunk(stream_ids_with_start_version, asc_or_desc, limit, cursor) do
     where_streams =
-      Enum.map(stream_ids_with_start_version, fn {stream_id, start_version} ->
+      stream_ids_with_start_version
+      |> Enum.map(fn {stream_id, start_version} ->
         dynamic([s], s.stream_id == ^stream_id and s.stream_version >= ^start_version)
       end)
       |> Enum.reduce(fn s, acc -> dynamic([], ^s or ^acc) end)

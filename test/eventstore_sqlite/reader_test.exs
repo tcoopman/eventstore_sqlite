@@ -43,13 +43,14 @@ defmodule EventstoreSqlite.ReaderTest do
       streams_to_read = [{@stream_id, 0}]
 
       result_chunks =
-        Reader.stream(streams_to_read, :asc, chunk_size)
+        streams_to_read
+        |> Reader.stream(:asc, chunk_size)
         |> Enum.to_list()
 
       all_returned_events = List.flatten(result_chunks)
 
       assert length(all_returned_events) == @total_events
-      assert all_returned_events |> Enum.map(& &1.data) == all_events
+      assert Enum.map(all_returned_events, & &1.data) == all_events
     end
 
     test "returns all events in descending chunks", %{all_events: all_events} do
@@ -57,14 +58,15 @@ defmodule EventstoreSqlite.ReaderTest do
       streams_to_read = [{@stream_id, 0}]
 
       result_chunks =
-        Reader.stream(streams_to_read, :desc, chunk_size)
+        streams_to_read
+        |> Reader.stream(:desc, chunk_size)
         |> Enum.to_list()
 
       all_returned_events = List.flatten(result_chunks)
       assert length(all_returned_events) == @total_events
 
-      expected_events = all_events |> Enum.reverse()
-      assert all_returned_events |> Enum.map(& &1.data) == expected_events
+      expected_events = Enum.reverse(all_events)
+      assert Enum.map(all_returned_events, & &1.data) == expected_events
     end
 
     test "returns one chunk when chunk size is larger than total events" do
@@ -73,7 +75,8 @@ defmodule EventstoreSqlite.ReaderTest do
       streams_to_read = [{@stream_id, 0}]
 
       result_chunks =
-        Reader.stream(streams_to_read, :asc, chunk_size)
+        streams_to_read
+        |> Reader.stream(:asc, chunk_size)
         |> Enum.to_list()
 
       assert length(result_chunks) == @total_events
@@ -83,7 +86,8 @@ defmodule EventstoreSqlite.ReaderTest do
       streams_to_read = [{"non-existent-stream", 0}]
 
       result =
-        Reader.stream(streams_to_read, :asc, 1000)
+        streams_to_read
+        |> Reader.stream(:asc, 1000)
         |> Enum.to_list()
 
       assert result == []

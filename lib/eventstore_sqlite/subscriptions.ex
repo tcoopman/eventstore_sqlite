@@ -1,4 +1,5 @@
 defmodule EventstoreSqlite.Subscriptions do
+  @moduledoc false
   use GenServer
   # Client
 
@@ -102,8 +103,7 @@ defmodule EventstoreSqlite.Subscriptions do
     subscribers = Map.get(state.subscribers, stream, [])
 
     subscribers =
-      subscribers
-      |> Enum.map(fn {subscriber_pid, version, filter} ->
+      Enum.map(subscribers, fn {subscriber_pid, version, filter} ->
         events =
           Enum.filter(events, fn event ->
             event.stream_version >= version

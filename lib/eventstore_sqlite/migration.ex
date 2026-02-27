@@ -1,7 +1,10 @@
 defmodule EventstoreSqlite.Migration do
+  @moduledoc false
+  alias Ecto.Adapters.SQL
+
   @all_stream_id "$all"
 
-  def intial_fill_all() do
+  def intial_fill_all do
     {:ok, _} =
       Ecto.Multi.new()
       |> delete_all()
@@ -16,7 +19,7 @@ defmodule EventstoreSqlite.Migration do
       DELETE FROM stream_events WHERE stream_id == '#{@all_stream_id}';
       """
 
-      Ecto.Adapters.SQL.query(repo, query)
+      SQL.query(repo, query)
     end)
   end
 
@@ -32,7 +35,7 @@ defmodule EventstoreSqlite.Migration do
       RETURNING 1
       """
 
-      Ecto.Adapters.SQL.query(repo, query)
+      SQL.query(repo, query)
     end)
   end
 
@@ -43,7 +46,7 @@ defmodule EventstoreSqlite.Migration do
       where stream_id = '$all'
       """
 
-      Ecto.Adapters.SQL.query(repo, query)
+      SQL.query(repo, query)
     end)
   end
 end

@@ -1,5 +1,7 @@
 defmodule EventstoreSqlite.Stream do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   schema "streams" do

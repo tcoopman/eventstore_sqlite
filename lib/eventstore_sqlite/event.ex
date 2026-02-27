@@ -1,5 +1,7 @@
 defmodule EventstoreSqlite.Event do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, []}
@@ -12,16 +14,16 @@ defmodule EventstoreSqlite.Event do
   end
 
   def new(event) do
-    date = DateTime.utc_now() |> DateTime.truncate(:second)
+    date = DateTime.truncate(DateTime.utc_now(), :second)
 
     data = %{
       id: Uniq.UUID.uuid7(),
-      data: event |> :erlang.term_to_binary(),
-      type: event.__struct__ |> Atom.to_string(),
+      data: :erlang.term_to_binary(event),
+      type: Atom.to_string(event.__struct__),
       inserted_at: date
     }
 
-    changeset(%__MODULE__{}, data) |> apply_action!(:insert)
+    %__MODULE__{} |> changeset(data) |> apply_action!(:insert)
   end
 
   @doc false

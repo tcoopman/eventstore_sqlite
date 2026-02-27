@@ -1,4 +1,5 @@
 defmodule EventstoreSqlite.RecordedEvent do
+  @moduledoc false
   use TypedStruct
 
   typedstruct enforce: true do

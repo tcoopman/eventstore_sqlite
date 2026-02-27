@@ -1,4 +1,5 @@
 defmodule EventstoreSqlite do
+  @moduledoc false
   import Ecto.Query, only: [from: 2]
 
   alias EventstoreSqlite.Event
@@ -54,33 +55,33 @@ defmodule EventstoreSqlite do
   end
 
   def read_stream_forward(stream_id, opts \\ []) do
-    stream_forward(stream_id, opts) |> Enum.to_list()
+    stream_id |> stream_forward(opts) |> Enum.to_list()
   end
 
   def read_stream_backward(stream_id, opts) when is_binary(stream_id) do
-    stream_backward(stream_id, opts) |> Enum.to_list()
+    stream_id |> stream_backward(opts) |> Enum.to_list()
   end
 
   def append_to_stream(stream_id, events, expected_version \\ :any_version)
 
   def append_to_stream(_stream_id, [], _), do: :ok
 
-  def append_to_stream(stream_id, events, expected_version)
-      when is_binary(stream_id) and is_list(events) do
+  def append_to_stream(stream_id, events, expected_version) when is_binary(stream_id) and is_list(events) do
     events = Enum.map(events, &Event.new(&1))
 
-    with {:ok, _} <-
-           Ecto.Multi.new()
-           |> validate_version(stream_id, expected_version)
-           |> insert_events(events)
-           |> insert_in_stream(stream_id)
-           |> insert_in_stream(@all_stream_id)
-           |> EventstoreSqlite.RepoWrite.transaction(mode: :immediate) do
-      :ok = EventstoreSqlite.Subscriptions.ping(stream_id)
+    case Ecto.Multi.new()
+         |> validate_version(stream_id, expected_version)
+         |> insert_events(events)
+         |> insert_in_stream(stream_id)
+         |> insert_in_stream(@all_stream_id)
+         |> EventstoreSqlite.RepoWrite.transaction(mode: :immediate) do
+      {:ok, _} ->
+        :ok = EventstoreSqlite.Subscriptions.ping(stream_id)
 
-      :ok
-    else
-      {:error, _, :wrong_expected_version, _} -> {:error, :wrong_expected_version}
+        :ok
+
+      {:error, _, :wrong_expected_version, _} ->
+        {:error, :wrong_expected_version}
     end
   end
 
@@ -91,7 +92,7 @@ defmodule EventstoreSqlite do
   @doc """
   Lists all streams in the eventstore
   """
-  def list_streams() do
+  def list_streams do
     query =
       from(stream in "streams",
         select: stream.stream_id,
@@ -107,24 +108,18 @@ defmodule EventstoreSqlite do
 
   defp validate_version(multi, stream_id, expected_version)
        when expected_version == :no_stream or expected_version == {:version, 0} do
-    multi
-    |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
-      unless repo.exists?(
-               from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)
-             ) do
-        {:ok, nil}
-      else
+    Ecto.Multi.run(multi, {:validate_version, stream_id}, fn repo, _changes ->
+      if repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
         {:error, :wrong_expected_version}
+      else
+        {:ok, nil}
       end
     end)
   end
 
   defp validate_version(multi, stream_id, :stream_exists) do
-    multi
-    |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
-      if repo.exists?(
-           from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)
-         ) do
+    Ecto.Multi.run(multi, {:validate_version, stream_id}, fn repo, _changes ->
+      if repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
         {:ok, nil}
       else
         {:error, :wrong_expected_version}
@@ -133,8 +128,7 @@ defmodule EventstoreSqlite do
   end
 
   defp validate_version(multi, stream_id, {:version, version}) do
-    multi
-    |> Ecto.Multi.run({:validate_version, stream_id}, fn repo, _changes ->
+    Ecto.Multi.run(multi, {:validate_version, stream_id}, fn repo, _changes ->
       if repo.exists?(
            from(stream in EventstoreSqlite.Stream,
              where: stream.stream_id == ^stream_id and stream.stream_version == ^version
@@ -148,8 +142,8 @@ defmodule EventstoreSqlite do
   end
 
   defp insert_events(multi, events) do
-    multi
-    |> Ecto.Multi.insert_all(
+    Ecto.Multi.insert_all(
+      multi,
       :insert_events,
       Event,
       fn _ -> Enum.map(events, &Map.drop(&1, [:__struct__, :__meta__])) end,
@@ -165,10 +159,8 @@ defmodule EventstoreSqlite do
          %EventstoreSqlite.Stream{stream_id: stream_id, stream_version: 0}}
     end)
     |> Ecto.Multi.insert_or_update({:insert_stream, stream_id}, fn %{
-                                                                     :insert_events =>
-                                                                       {_, events},
-                                                                     {:stream, ^stream_id} =>
-                                                                       stream
+                                                                     :insert_events => {_, events},
+                                                                     {:stream, ^stream_id} => stream
                                                                    } ->
       case stream.id do
         nil ->

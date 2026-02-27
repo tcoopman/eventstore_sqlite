@@ -1,6 +1,5 @@
 defmodule EventstoreSqlite.SubscribeTest do
   use ExUnit.Case
-
   use Mneme
   use EventstoreSqlite.DataCase
   use TypedStruct
@@ -20,6 +19,7 @@ defmodule EventstoreSqlite.SubscribeTest do
   end
 
   defmodule Subscriber do
+    @moduledoc false
     use GenServer
 
     def subscribe(stream, start_version \\ 0) do

@@ -1,6 +1,5 @@
 defmodule EventstoreSqlite.ManyEventsTest do
   use EventstoreSqlite.DataCase
-
   use Mneme
   use TypedStruct
 
@@ -35,7 +34,7 @@ defmodule EventstoreSqlite.ManyEventsTest do
   describe "read_stream_forward" do
     test "sanity with limit" do
       all = EventstoreSqlite.read_stream_forward("$all", count: 20_000)
-      auto_assert(20000 <- Enum.count(all))
+      auto_assert(20_000 <- Enum.count(all))
     end
 
     test "first 2" do
@@ -63,7 +62,7 @@ defmodule EventstoreSqlite.ManyEventsTest do
           %EventstoreSqlite.RecordedEvent{
             data: %FooTestEvent{text: "event: 2999"},
             stream_id: "$all",
-            stream_version: 29999,
+            stream_version: 29_999,
             type: "Elixir.EventstoreSqlite.ManyEventsTest.FooTestEvent"
           }
         ] <- EventstoreSqlite.read_stream_forward({"$all", 3_000 * 10 - 1}, count: 2)
