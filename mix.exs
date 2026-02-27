@@ -30,7 +30,7 @@ defmodule EventstoreSqlite.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:ecto_sql, "~> 3.6"},
+      {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, ">= 0.0.0"},
       {:jason, "~> 1.4"},
       {:mneme, ">= 0.0.0", only: [:dev, :test]},
