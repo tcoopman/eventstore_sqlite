@@ -14,6 +14,10 @@ defmodule EventstoreSqlite.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [precommit: :test]]
+  end
+
   # Configuration for the OTP application.
   #
   # Type `mix help compile.app` for more information.
@@ -37,7 +41,8 @@ defmodule EventstoreSqlite.MixProject do
       {:typed_struct, "~> 0.3.0"},
       {:uniq, "~> 0.1"},
       {:benchee, ">= 0.0.0", only: [:bench]},
-      {:rewrite, ">= 0.0.0", only: [:dev, :test], override: true}
+      {:rewrite, ">= 0.0.0", only: [:dev, :test], override: true},
+      {:styler, "~> 1.9", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -46,7 +51,8 @@ defmodule EventstoreSqlite.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end
 end
