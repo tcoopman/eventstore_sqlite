@@ -84,6 +84,48 @@ defmodule EventstoreSqliteTest do
     end
   end
 
+  describe "append_to_stream/2 stream ids with SQL metacharacters" do
+    test "stream id containing an apostrophe round-trips" do
+      stream_id = "o'brien-orders"
+      event = %FooTestEvent{text: "hello"}
+
+      assert :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
+
+      assert [
+               %EventstoreSqlite.RecordedEvent{stream_id: ^stream_id, data: ^event, stream_version: 0}
+             ] = stream_forward(stream_id)
+    end
+
+    test "an injection attempt in the stream id is treated as data, not SQL" do
+      stream_id = "x'); DROP TABLE events;--"
+      event = %FooTestEvent{text: "still here"}
+
+      assert :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
+
+      # The malicious id round-trips as a plain stream id ...
+      assert [%EventstoreSqlite.RecordedEvent{data: ^event}] = stream_forward(stream_id)
+
+      # ... and the events table still exists and accepts writes.
+      assert :ok = EventstoreSqlite.append_to_stream("normal-stream", [event])
+      assert [%EventstoreSqlite.RecordedEvent{data: ^event}] = stream_forward("normal-stream")
+    end
+
+    test "multiple appends to an apostrophe stream id keep correct versions" do
+      stream_id = "a'b"
+      e1 = %FooTestEvent{text: "1"}
+      e2 = %FooTestEvent{text: "2"}
+
+      assert :ok = EventstoreSqlite.append_to_stream(stream_id, [e1, e2])
+      assert :ok = EventstoreSqlite.append_to_stream(stream_id, [e1])
+
+      assert [
+               %EventstoreSqlite.RecordedEvent{data: ^e1, stream_version: 0},
+               %EventstoreSqlite.RecordedEvent{data: ^e2, stream_version: 1},
+               %EventstoreSqlite.RecordedEvent{data: ^e1, stream_version: 2}
+             ] = stream_forward(stream_id)
+    end
+  end
+
   describe "read_stream_forward" do
     test "stream does not exist" do
       auto_assert([] <- stream_forward("does-not-exist", count: 1))

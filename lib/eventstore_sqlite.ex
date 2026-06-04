@@ -9,6 +9,11 @@ defmodule EventstoreSqlite do
   @default_count 10_000
   @default_chunk_size 1_000
 
+  # Max events per INSERT statement. Each event binds 5 parameters, so this keeps
+  # us comfortably under SQLite's bound-parameter limit (SQLITE_MAX_VARIABLE_NUMBER)
+  # for arbitrarily large appends.
+  @insert_chunk_size 1_000
+
   def stream_forward(stream_id, opts \\ [])
 
   def stream_forward(stream_id, opts) when is_binary(stream_id) do
@@ -161,25 +166,27 @@ defmodule EventstoreSqlite do
 
     repo.insert_or_update!(stream_changeset)
 
-    values =
-      events
-      |> Enum.with_index(fn event, index ->
-        "(#{index}, '#{event.id}')"
-      end)
-      |> Enum.join(",")
+    events
+    |> Enum.with_index(stream.stream_version)
+    |> Enum.chunk_every(@insert_chunk_size)
+    |> Enum.each(fn chunk ->
+      placeholders = Enum.map_join(chunk, ",", fn _ -> "(?, ?, ?, ?, ?)" end)
 
-    query = ~s"""
-    WITH events (idx, event_id) AS ( VALUES #{values} )
+      params =
+        Enum.flat_map(chunk, fn {event, version} ->
+          [event.id, stream_id, version, stream_id, version]
+        end)
+
+      query = ~s"""
       INSERT INTO stream_events (
         event_id, stream_id, stream_version, original_stream_id, original_stream_version
       )
-      SELECT
-        events.event_id, '#{stream_id}', $1::integer + events.idx, '#{stream_id}', $1::integer + events.idx
-      FROM events
-      RETURNING 1
-    """
+      VALUES #{placeholders}
+      """
 
-    Ecto.Adapters.SQL.query!(repo, query, [stream.stream_version])
+      Ecto.Adapters.SQL.query!(repo, query, params)
+    end)
+
     :ok
   end
 end
