@@ -4,6 +4,8 @@ defmodule EventstoreSqliteTest do
   use EventstoreSqlite.DataCase
   use TypedStruct
 
+  alias Ecto.Adapters.SQL
+
   doctest EventstoreSqlite
 
   typedstruct module: FooTestEvent do
@@ -123,6 +125,26 @@ defmodule EventstoreSqliteTest do
                %EventstoreSqlite.RecordedEvent{data: ^e2, stream_version: 1},
                %EventstoreSqlite.RecordedEvent{data: ^e1, stream_version: 2}
              ] = stream_forward(stream_id)
+    end
+  end
+
+  describe "event immutability" do
+    test "events cannot be deleted" do
+      :ok = EventstoreSqlite.append_to_stream("immutable", [%FooTestEvent{text: "x"}])
+
+      error =
+        catch_error(SQL.query!(EventstoreSqlite.RepoWrite, "DELETE FROM events", []))
+
+      assert Exception.message(error) =~ "cannot delete events"
+    end
+
+    test "events cannot be updated" do
+      :ok = EventstoreSqlite.append_to_stream("immutable", [%FooTestEvent{text: "x"}])
+
+      error =
+        catch_error(SQL.query!(EventstoreSqlite.RepoWrite, "UPDATE events SET type = 'tampered'", []))
+
+      assert Exception.message(error) =~ "cannot update events"
     end
   end
 

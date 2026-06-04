@@ -6,15 +6,22 @@ defmodule EventstoreSqlite.DataCase do
   You may define functions here to be used as helpers in
   your tests.
 
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use EventstoreSqlite.DataCase, async: true`, although
-  this option is not recommended for other databases.
+  Because the read and write repos share a single SQLite file, writes must be
+  committed (not held in a rolled-back transaction) for reads to see them, so the
+  Ecto SQL sandbox does not fit. Instead, every test starts from an empty schema:
+  `reset!/0` truncates all tables before each test. Tests therefore run
+  synchronously (`async: true` is not supported).
+
+  The `events` table is immutable in production via a BEFORE-DELETE trigger. To
+  keep the test schema identical, `reset!/0` only drops that guard for the
+  instant it takes to truncate `events`, then reinstalls the exact definition it
+  read back from the schema, so test bodies still run against the real, immutable
+  schema and the trigger never drifts from the migration.
   """
 
   use ExUnit.CaseTemplate
+
+  alias Ecto.Adapters.SQL
 
   using do
     quote do
@@ -26,19 +33,41 @@ defmodule EventstoreSqlite.DataCase do
   end
 
   setup _tags do
-    EventstoreSqlite.DataCase.setup_sandbox()
+    EventstoreSqlite.DataCase.reset!()
     :ok
   end
 
   @doc """
-  Sets up the sandbox based on the test tags.
-  """
-  def setup_sandbox do
-    System.cmd("sqlite3", ["test.db", ".backup 'old.test.db'"])
+  Truncates all tables so each test starts from an empty schema.
 
-    on_exit(fn ->
-      System.cmd("sqlite3", ["old.test.db", ".backup 'test.db'"])
-    end)
+  Deletes the child table (`stream_events`) before its parents to stay
+  foreign-key safe. The `events` table's BEFORE-DELETE guard is dropped only for
+  the duration of its truncation and then reinstalled from its own definition (as
+  stored in `sqlite_master`), so it stays in force for every test body without
+  the reset hardcoding any trigger SQL.
+  """
+  def reset! do
+    repo = EventstoreSqlite.RepoWrite
+
+    SQL.query!(repo, "DELETE FROM stream_events", [])
+    truncate_events(repo)
+    SQL.query!(repo, "DELETE FROM streams", [])
+
+    :ok
+  end
+
+  defp truncate_events(repo) do
+    query = "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'no_delete_events'"
+
+    case SQL.query!(repo, query, []) do
+      %{rows: [[trigger_sql]]} ->
+        SQL.query!(repo, "DROP TRIGGER no_delete_events", [])
+        SQL.query!(repo, "DELETE FROM events", [])
+        SQL.query!(repo, trigger_sql, [])
+
+      %{rows: []} ->
+        SQL.query!(repo, "DELETE FROM events", [])
+    end
   end
 
   @doc """
