@@ -169,6 +169,64 @@ defmodule EventstoreSqlite.SubscribeTest do
     end
   end
 
+  describe "subscriber cleanup" do
+    test "subscriptions are removed when the subscriber dies" do
+      {:ok, pid} = Subscriber.subscribe("test-stream-1")
+
+      state = :sys.get_state(EventstoreSqlite.Subscriptions)
+      assert Map.has_key?(state.subscribers, "test-stream-1")
+      assert Map.has_key?(state.subscribed_streams, "test-stream-1")
+      assert Map.has_key?(state.monitors, pid)
+
+      :ok = GenServer.stop(pid)
+
+      state = :sys.get_state(EventstoreSqlite.Subscriptions)
+      refute Map.has_key?(state.subscribers, "test-stream-1")
+      refute Map.has_key?(state.subscribed_streams, "test-stream-1")
+      refute Map.has_key?(state.monitors, pid)
+    end
+
+    test "other subscribers to the same stream are kept when one dies" do
+      {:ok, dead} = Subscriber.subscribe("test-stream-1")
+      {:ok, alive} = Subscriber.subscribe("test-stream-1")
+
+      :ok = GenServer.stop(dead)
+
+      state = :sys.get_state(EventstoreSqlite.Subscriptions)
+      assert [{^alive, _version, _filter}] = state.subscribers["test-stream-1"]
+      assert Map.has_key?(state.subscribed_streams, "test-stream-1")
+      refute Map.has_key?(state.monitors, dead)
+
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
+
+      auto_assert(
+        [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0}] <-
+          Subscriber.events(alive)
+      )
+    end
+
+    test "resubscribing after the last subscriber died starts from the requested version" do
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event])
+
+      {:ok, first} = Subscriber.subscribe("test-stream-1")
+      assert [_, _] = Subscriber.events(first)
+      :ok = GenServer.stop(first)
+
+      {:ok, second} = Subscriber.subscribe("test-stream-1")
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
+
+      auto_assert(
+        [
+          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0},
+          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 1},
+          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}
+        ] <- Subscriber.events(second)
+      )
+    end
+  end
+
   describe "subscribe_to_stream/4 complex test" do
     test "2 streams subscriptions" do
       event = %FooTestEvent{text: "some text"}

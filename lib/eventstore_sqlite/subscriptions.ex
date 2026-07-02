@@ -23,7 +23,8 @@ defmodule EventstoreSqlite.Subscriptions do
      %{
        subscribed_streams: %{},
        subscribers: %{},
-       streams_to_handle: :queue.new()
+       streams_to_handle: :queue.new(),
+       monitors: %{}
      }}
   end
 
@@ -31,6 +32,7 @@ defmodule EventstoreSqlite.Subscriptions do
   def handle_call({:subscribe_to_stream, subscriber_pid, stream, version, filter}, _from, state) do
     state =
       state
+      |> monitor_subscriber(subscriber_pid)
       |> update_subscribed_streams(stream, version)
       |> update_subscribers(subscriber_pid, stream, version, filter)
       |> update_streams_to_handle(stream)
@@ -42,6 +44,11 @@ defmodule EventstoreSqlite.Subscriptions do
   def handle_cast({:ping, stream}, state) do
     state = state |> update_streams_to_handle(stream) |> update_streams_to_handle("$all")
     {:noreply, state, {:continue, :handle_stream}}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    {:noreply, remove_subscriber(state, pid)}
   end
 
   @impl true
@@ -81,6 +88,32 @@ defmodule EventstoreSqlite.Subscriptions do
     %{state | subscribed_streams: subscribed_streams}
   end
 
+  defp monitor_subscriber(state, subscriber_pid) do
+    if Map.has_key?(state.monitors, subscriber_pid) do
+      state
+    else
+      ref = Process.monitor(subscriber_pid)
+      %{state | monitors: Map.put(state.monitors, subscriber_pid, ref)}
+    end
+  end
+
+  defp remove_subscriber(state, pid) do
+    {emptied_streams, subscribers} =
+      Enum.reduce(state.subscribers, {[], %{}}, fn {stream, subs}, {emptied, acc} ->
+        case Enum.reject(subs, fn {sub_pid, _version, _filter} -> sub_pid == pid end) do
+          [] -> {[stream | emptied], acc}
+          subs -> {emptied, Map.put(acc, stream, subs)}
+        end
+      end)
+
+    %{
+      state
+      | subscribers: subscribers,
+        subscribed_streams: Map.drop(state.subscribed_streams, emptied_streams),
+        monitors: Map.delete(state.monitors, pid)
+    }
+  end
+
   defp update_subscribers(state, subscriber_pid, stream, version, filter) do
     subscribers =
       Map.update(state.subscribers, stream, [{subscriber_pid, version, filter}], fn other ->
@@ -91,6 +124,13 @@ defmodule EventstoreSqlite.Subscriptions do
   end
 
   defp send_to_stream(state, stream) do
+    case Map.get(state.subscribers, stream, []) do
+      [] -> state
+      subscribers -> send_to_stream(state, stream, subscribers)
+    end
+  end
+
+  defp send_to_stream(state, stream, subscribers) do
     version_to_read = Map.get(state.subscribed_streams, stream, 0)
     events = EventstoreSqlite.read_stream_forward({stream, version_to_read})
 
@@ -99,8 +139,6 @@ defmodule EventstoreSqlite.Subscriptions do
         nil -> version_to_read
         e -> e.stream_version + 1
       end
-
-    subscribers = Map.get(state.subscribers, stream, [])
 
     subscribers =
       Enum.map(subscribers, fn {subscriber_pid, version, filter} ->
