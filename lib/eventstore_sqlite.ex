@@ -94,7 +94,15 @@ defmodule EventstoreSqlite do
     end
   end
 
-  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil) do
+  @doc """
+  Subscribes `subscriber_pid` to `stream`; events arrive as `{:events, [RecordedEvent.t()]}` messages.
+
+  `version` is the first event version to deliver: `0` (the default) replays the whole
+  stream first, and `:current` skips existing history so only events appended after
+  subscribing are delivered.
+  """
+  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil)
+      when is_integer(version) or version == :current do
     EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter)
   end
 

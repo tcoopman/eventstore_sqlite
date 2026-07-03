@@ -169,6 +169,46 @@ defmodule EventstoreSqlite.SubscribeTest do
     end
   end
 
+  describe "subscribe_to_stream/4 from :current" do
+    test "skips existing history and only receives events appended after subscribing" do
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event])
+
+      {:ok, pid} = Subscriber.subscribe("test-stream-1", :current)
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
+
+      auto_assert(
+        [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}] <-
+          Subscriber.events(pid)
+      )
+    end
+
+    test "a stream that does not exist yet starts from the beginning" do
+      {:ok, pid} = Subscriber.subscribe("test-stream-1", :current)
+
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
+
+      auto_assert(
+        [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0}] <-
+          Subscriber.events(pid)
+      )
+    end
+
+    test "works for the $all stream" do
+      event = %FooTestEvent{text: "some text"}
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event])
+
+      {:ok, pid} = Subscriber.subscribe("$all", :current)
+      assert :ok = EventstoreSqlite.append_to_stream("test-stream-2", [event])
+
+      auto_assert(
+        [%EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3}] <-
+          Subscriber.events(pid)
+      )
+    end
+  end
+
   describe "subscriber cleanup" do
     test "subscriptions are removed when the subscriber dies" do
       {:ok, pid} = Subscriber.subscribe("test-stream-1")

@@ -1,6 +1,9 @@
 defmodule EventstoreSqlite.Subscriptions do
   @moduledoc false
   use GenServer
+
+  import Ecto.Query, only: [from: 2]
+
   # Client
 
   def start_link(_) do
@@ -30,6 +33,8 @@ defmodule EventstoreSqlite.Subscriptions do
 
   @impl true
   def handle_call({:subscribe_to_stream, subscriber_pid, stream, version, filter}, _from, state) do
+    version = resolve_version(stream, version)
+
     state =
       state
       |> monitor_subscriber(subscriber_pid)
@@ -65,6 +70,16 @@ defmodule EventstoreSqlite.Subscriptions do
         {:noreply, state}
     end
   end
+
+  # `streams.stream_version` is the number of events in the stream, which is the
+  # version the next event will get — so it is exactly "everything after now".
+  defp resolve_version(stream, :current) do
+    query = from(s in "streams", where: s.stream_id == ^stream, select: s.stream_version)
+
+    EventstoreSqlite.RepoRead.one(query) || 0
+  end
+
+  defp resolve_version(_stream, version) when is_integer(version), do: version
 
   defp update_streams_to_handle(state, stream) do
     cond do
