@@ -67,6 +67,30 @@ defmodule EventstoreSqlite do
     stream_id |> stream_backward(opts) |> Enum.to_list()
   end
 
+  @doc """
+  Appends `events` to `stream_id`.
+
+  Each element of `events` is either a bare event struct, or an
+  `EventstoreSqlite.NewEvent` carrying metadata and/or a caller-supplied event
+  id. The two shapes can be mixed in one call.
+
+      append_to_stream("scan-42", [
+        %TicketScanned{ticket_id: id},
+        %EventstoreSqlite.NewEvent{
+          data: %BadgePrinted{ticket_id: id},
+          metadata: %{correlation_id: flow_id, causation_id: scan_id}
+        }
+      ])
+
+  `expected_version` guards the append: `:any_version` (the default),
+  `:no_stream`, `:stream_exists`, or `{:version, n}`. A mismatch returns
+  `{:error, :wrong_expected_version}` and writes nothing.
+
+  Supplying your own id lets an event reference a sibling it is appended
+  alongside. The id must be a UUID string and must not already exist in the
+  store — a malformed id raises `ArgumentError` and a duplicate raises out of the
+  write transaction, leaving the whole batch unwritten.
+  """
   def append_to_stream(stream_id, events, expected_version \\ :any_version)
 
   def append_to_stream(_stream_id, [], _), do: :ok

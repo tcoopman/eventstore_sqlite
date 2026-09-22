@@ -41,17 +41,7 @@ defmodule EventstoreSqlite.Reader do
 
             next_state = {next_cursor, new_count}
 
-            parsed_chunk =
-              Stream.map(raw_chunk, fn event_map ->
-                EventstoreSqlite.RecordedEvent.parse(
-                  event_map.id,
-                  event_map.type,
-                  event_map.stream_id,
-                  event_map.data,
-                  event_map.created,
-                  event_map.stream_version
-                )
-              end)
+            parsed_chunk = Stream.map(raw_chunk, &EventstoreSqlite.RecordedEvent.parse/1)
 
             {parsed_chunk, next_state}
           end
@@ -92,7 +82,8 @@ defmodule EventstoreSqlite.Reader do
           id: event.id,
           type: event.type,
           data: event.data,
-          created: event.inserted_at,
+          metadata: event.metadata,
+          created_at: event.inserted_at,
           stream_id: s.stream_id,
           stream_version: s.stream_version
         },

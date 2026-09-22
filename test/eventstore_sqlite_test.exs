@@ -128,6 +128,199 @@ defmodule EventstoreSqliteTest do
     end
   end
 
+  describe "append_to_stream/2 metadata" do
+    test "an event appended without metadata reads back as an empty map" do
+      stream_id = "no-metadata"
+      event = %FooTestEvent{text: "hello"}
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: %{}}] = stream_forward(stream_id)
+    end
+
+    test "no metadata is stored as NULL, not as an encoded empty map" do
+      :ok = EventstoreSqlite.append_to_stream("no-metadata", [%FooTestEvent{text: "hello"}])
+
+      assert %{rows: [[nil]]} = SQL.query!(EventstoreSqlite.RepoRead, "SELECT metadata FROM events", [])
+    end
+
+    test "metadata round-trips with atom keys intact" do
+      stream_id = "scan-1"
+      correlation_id = Uniq.UUID.uuid7()
+      causation_id = Uniq.UUID.uuid7()
+
+      new_event = %EventstoreSqlite.NewEvent{
+        data: %FooTestEvent{text: "scanned"},
+        metadata: %{correlation_id: correlation_id, causation_id: causation_id}
+      }
+
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [new_event])
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: metadata}] = stream_forward(stream_id)
+      assert metadata == %{correlation_id: correlation_id, causation_id: causation_id}
+    end
+
+    test "metadata holding a nested struct survives the round trip" do
+      stream_id = "nested-metadata"
+
+      new_event = %EventstoreSqlite.NewEvent{
+        data: %FooTestEvent{text: "hello"},
+        metadata: %{origin: %Complex{c: "complex"}}
+      }
+
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [new_event])
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: %{origin: %Complex{c: "complex"}}}] =
+               stream_forward(stream_id)
+    end
+
+    test "bare events and NewEvents can be mixed in one append" do
+      stream_id = "mixed"
+      bare = %FooTestEvent{text: "bare"}
+      wrapped = %EventstoreSqlite.NewEvent{data: %FooTestEvent{text: "wrapped"}, metadata: %{a: 1}}
+
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [bare, wrapped])
+
+      assert [
+               %EventstoreSqlite.RecordedEvent{data: ^bare, metadata: %{}, stream_version: 0},
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "wrapped"},
+                 metadata: %{a: 1},
+                 stream_version: 1
+               }
+             ] = stream_forward(stream_id)
+    end
+
+    test "metadata is returned when reading backward too" do
+      stream_id = "backward-metadata"
+
+      new_event = %EventstoreSqlite.NewEvent{
+        data: %FooTestEvent{text: "hello"},
+        metadata: %{causation_id: "abc"}
+      }
+
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [new_event])
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: %{causation_id: "abc"}}] =
+               stream_backward(stream_id)
+    end
+
+    test "metadata is returned on the $all stream" do
+      new_event = %EventstoreSqlite.NewEvent{
+        data: %FooTestEvent{text: "hello"},
+        metadata: %{causation_id: "abc"}
+      }
+
+      :ok = EventstoreSqlite.append_to_stream("some-stream", [new_event])
+
+      assert [%EventstoreSqlite.RecordedEvent{stream_id: "$all", metadata: %{causation_id: "abc"}}] =
+               stream_forward("$all")
+    end
+
+    test "a row written before metadata existed reads back as an empty map" do
+      id = Uniq.UUID.uuid7()
+
+      SQL.query!(
+        EventstoreSqlite.RepoWrite,
+        "INSERT INTO events (id, type, data, metadata, inserted_at) VALUES (?, ?, ?, NULL, ?)",
+        [
+          id,
+          "Elixir.EventstoreSqliteTest.FooTestEvent",
+          :erlang.term_to_binary(%FooTestEvent{text: "legacy"}),
+          DateTime.to_iso8601(DateTime.truncate(DateTime.utc_now(), :second))
+        ]
+      )
+
+      SQL.query!(
+        EventstoreSqlite.RepoWrite,
+        "INSERT INTO streams (stream_id, stream_version, inserted_at) VALUES (?, 1, ?)",
+        ["legacy-stream", DateTime.to_iso8601(DateTime.truncate(DateTime.utc_now(), :second))]
+      )
+
+      SQL.query!(
+        EventstoreSqlite.RepoWrite,
+        "INSERT INTO stream_events (event_id, stream_id, stream_version, original_stream_id, original_stream_version) VALUES (?, ?, 0, ?, 0)",
+        [id, "legacy-stream", "legacy-stream"]
+      )
+
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "legacy"},
+                 metadata: %{}
+               }
+             ] = stream_forward("legacy-stream")
+    end
+  end
+
+  describe "append_to_stream/2 caller-supplied event id" do
+    test "the supplied id becomes the recorded event's id" do
+      stream_id = "own-id"
+      id = Uniq.UUID.uuid7()
+
+      new_event = %EventstoreSqlite.NewEvent{id: id, data: %FooTestEvent{text: "hello"}}
+
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [new_event])
+
+      assert [%EventstoreSqlite.RecordedEvent{id: ^id}] = stream_forward(stream_id)
+    end
+
+    test "an id is still minted when none is supplied" do
+      stream_id = "minted-id"
+      :ok = EventstoreSqlite.append_to_stream(stream_id, [%FooTestEvent{text: "hello"}])
+
+      assert [%EventstoreSqlite.RecordedEvent{id: id}] = stream_forward(stream_id)
+      assert {:ok, _} = Uniq.UUID.parse(id)
+    end
+
+    test "an event can reference a sibling appended in the same batch" do
+      stream_id = "flow"
+      scan_id = Uniq.UUID.uuid7()
+
+      events = [
+        %EventstoreSqlite.NewEvent{
+          id: scan_id,
+          data: %FooTestEvent{text: "scanned"},
+          metadata: %{correlation_id: scan_id, causation_id: nil}
+        },
+        %EventstoreSqlite.NewEvent{
+          data: %FooTestEvent{text: "printed"},
+          metadata: %{correlation_id: scan_id, causation_id: scan_id}
+        }
+      ]
+
+      :ok = EventstoreSqlite.append_to_stream(stream_id, events)
+
+      assert [
+               %EventstoreSqlite.RecordedEvent{id: ^scan_id, metadata: %{causation_id: nil}},
+               %EventstoreSqlite.RecordedEvent{metadata: %{causation_id: ^scan_id}}
+             ] = stream_forward(stream_id)
+    end
+
+    test "a malformed id is rejected before anything is written" do
+      new_event = %EventstoreSqlite.NewEvent{id: "not-a-uuid", data: %FooTestEvent{text: "hello"}}
+
+      assert_raise ArgumentError, fn ->
+        EventstoreSqlite.append_to_stream("bad-id", [new_event])
+      end
+
+      assert [] = stream_forward("bad-id")
+    end
+
+    test "a duplicate id aborts the whole append" do
+      id = Uniq.UUID.uuid7()
+      first = %EventstoreSqlite.NewEvent{id: id, data: %FooTestEvent{text: "first"}}
+      :ok = EventstoreSqlite.append_to_stream("dup", [first])
+
+      second = %EventstoreSqlite.NewEvent{id: id, data: %FooTestEvent{text: "second"}}
+
+      assert_raise Exqlite.Error, fn ->
+        EventstoreSqlite.append_to_stream("dup", [%FooTestEvent{text: "sibling"}, second])
+      end
+
+      assert [%EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "first"}}] =
+               stream_forward("dup")
+    end
+  end
+
   describe "event immutability" do
     test "events cannot be deleted" do
       :ok = EventstoreSqlite.append_to_stream("immutable", [%FooTestEvent{text: "x"}])

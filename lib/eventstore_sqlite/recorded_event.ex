@@ -9,18 +9,21 @@ defmodule EventstoreSqlite.RecordedEvent do
     field(:stream_id, :string)
     field(:stream_version, :number)
     field(:created_at, :date)
+    field(:metadata, :map, default: %{})
   end
 
-  def parse(id, type, stream_id, data, created, stream_version) do
-    event = :erlang.binary_to_term(data)
-
+  def parse(row) do
     %EventstoreSqlite.RecordedEvent{
-      id: id,
-      data: event,
-      stream_id: stream_id,
-      stream_version: stream_version,
-      type: type,
-      created_at: created
+      id: row.id,
+      data: :erlang.binary_to_term(row.data),
+      stream_id: row.stream_id,
+      stream_version: row.stream_version,
+      type: row.type,
+      created_at: row.created_at,
+      metadata: decode_metadata(row.metadata)
     }
   end
+
+  defp decode_metadata(nil), do: %{}
+  defp decode_metadata(metadata), do: :erlang.binary_to_term(metadata)
 end

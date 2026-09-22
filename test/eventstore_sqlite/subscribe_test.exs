@@ -209,6 +209,44 @@ defmodule EventstoreSqlite.SubscribeTest do
     end
   end
 
+  describe "subscribe_to_stream/4 metadata" do
+    test "a subscriber receives the envelope with the event" do
+      {:ok, pid} = Subscriber.subscribe("test-stream-1")
+      correlation_id = Uniq.UUID.uuid7()
+
+      new_event = %EventstoreSqlite.NewEvent{
+        data: %FooTestEvent{text: "scanned"},
+        metadata: %{correlation_id: correlation_id, causation_id: nil}
+      }
+
+      :ok = EventstoreSqlite.append_to_stream("test-stream-1", [new_event])
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: metadata}] = Subscriber.events(pid)
+      assert metadata == %{correlation_id: correlation_id, causation_id: nil}
+    end
+
+    test "a subscriber receives an empty map for events appended without metadata" do
+      {:ok, pid} = Subscriber.subscribe("test-stream-1")
+      :ok = EventstoreSqlite.append_to_stream("test-stream-1", [%FooTestEvent{text: "plain"}])
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: %{}}] = Subscriber.events(pid)
+    end
+
+    test "a subscriber replaying history receives the envelope too" do
+      new_event = %EventstoreSqlite.NewEvent{
+        data: %FooTestEvent{text: "scanned"},
+        metadata: %{causation_id: "abc"}
+      }
+
+      :ok = EventstoreSqlite.append_to_stream("test-stream-1", [new_event])
+
+      {:ok, pid} = Subscriber.subscribe("test-stream-1")
+
+      assert [%EventstoreSqlite.RecordedEvent{metadata: %{causation_id: "abc"}}] =
+               Subscriber.events(pid)
+    end
+  end
+
   describe "subscriber cleanup" do
     test "subscriptions are removed when the subscriber dies" do
       {:ok, pid} = Subscriber.subscribe("test-stream-1")
