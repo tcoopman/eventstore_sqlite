@@ -70,6 +70,51 @@ defmodule EventstoreSqlite.ManyEventsTest do
     end
   end
 
+  describe "default :count" do
+    test "stream_forward and stream_backward read the whole stream" do
+      assert "$all" |> EventstoreSqlite.stream_forward() |> Enum.count() == 30_000
+      assert "$all" |> EventstoreSqlite.stream_backward() |> Enum.count() == 30_000
+    end
+
+    test "read_stream_forward and read_stream_backward still stop at 10_000" do
+      assert "$all" |> EventstoreSqlite.read_stream_forward() |> Enum.count() == 10_000
+      assert "$all" |> EventstoreSqlite.read_stream_backward() |> Enum.count() == 10_000
+    end
+
+    test "count: nil lifts the read_stream limit" do
+      assert "$all" |> EventstoreSqlite.read_stream_forward(count: nil) |> Enum.count() == 30_000
+    end
+  end
+
+  describe "subscription catch-up" do
+    test "a subscriber more than one batch behind receives the whole history" do
+      :ok = EventstoreSqlite.subscribe_to_stream(self(), "$all")
+
+      assert_receive {:events, first}, 5_000
+      assert_receive {:events, second}, 5_000
+      assert_receive {:events, third}, 5_000
+      refute_receive {:events, _}, 100
+
+      assert Enum.map([first, second, third], &length/1) == [10_000, 10_000, 10_000]
+      assert Enum.map(first ++ second ++ third, & &1.stream_version) == Enum.to_list(0..29_999)
+    end
+
+    test "catch-up honours :batch_size" do
+      :ok = EventstoreSqlite.subscribe_to_stream(self(), "A", 0, nil, batch_size: 2_500)
+
+      batches =
+        for _ <- 1..3 do
+          assert_receive {:events, events}, 5_000
+          events
+        end
+
+      refute_receive {:events, _}, 100
+
+      assert Enum.map(batches, &length/1) == [2_500, 2_500, 1_000]
+      assert Enum.map(List.flatten(batches), & &1.stream_version) == Enum.to_list(0..5_999)
+    end
+  end
+
   defp insert_many(stream, number) do
     events = for i <- 0..(number - 1), do: %FooTestEvent{text: "event: #{i}"}
 

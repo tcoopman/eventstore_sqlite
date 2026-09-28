@@ -14,57 +14,57 @@ defmodule EventstoreSqlite do
   # for arbitrarily large appends.
   @insert_chunk_size 1_000
 
-  def stream_forward(stream_id, opts \\ [])
+  @doc """
+  Returns a lazy stream of the events in `stream_id`, oldest first.
 
-  def stream_forward(stream_id, opts) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, @default_count)
+  `stream_id` is a stream id, a `{stream_id, start_version}` tuple, or a list of
+  either to read several streams interleaved in append order.
 
-    Reader.stream([{stream_id, 0}], :asc, @default_chunk_size, limit)
+  Options:
+
+    * `:count` - stop after this many events. Defaults to no limit: the stream is
+      read in chunks, so reading a whole stream does not load it into memory.
+    * `:chunk_size` - how many events to fetch per database query (default
+      #{@default_chunk_size}). A chunk's raw rows stay in memory until the consumer
+      has worked through it, so lower this for streams of large events.
+  """
+  def stream_forward(stream_id, opts \\ []) do
+    {chunk_size, limit} = reader_opts(opts)
+
+    Reader.stream(with_start_versions(stream_id), :asc, chunk_size, limit)
   end
 
-  def stream_forward({stream_id, start_version}, opts) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, @default_count)
+  @doc """
+  Returns a lazy stream of the events in `stream_id`, newest first, down to the
+  start version if one is given.
 
-    Reader.stream([{stream_id, start_version}], :asc, @default_chunk_size, limit)
+  Takes the same `stream_id` shapes and options as `stream_forward/2`.
+  """
+  def stream_backward(stream_id, opts \\ []) do
+    {chunk_size, limit} = reader_opts(opts)
+
+    Reader.stream(with_start_versions(stream_id), :desc, chunk_size, limit)
   end
 
-  def stream_forward(stream_ids, opts) when is_list(stream_ids) do
-    limit = Keyword.get(opts, :count, @default_count)
+  @doc """
+  Reads the events in `stream_id` into a list, oldest first.
 
-    stream_ids_with_version =
-      Enum.map(stream_ids, fn
-        {stream_id, start_version} -> {stream_id, start_version}
-        stream_id -> {stream_id, 0}
-      end)
-
-    Reader.stream(stream_ids_with_version, :asc, @default_chunk_size, limit)
-  end
-
-  def stream_backward(stream_id, opts \\ [])
-
-  def stream_backward(stream_id, opts) when is_binary(stream_id) do
-    limit = Keyword.get(opts, :count, @default_count)
-
-    Reader.stream([{stream_id, 0}], :desc, @default_chunk_size, limit)
-  end
-
-  def stream_backward(stream_ids, opts) when is_list(stream_ids) do
-    limit = Keyword.get(opts, :count, @default_count)
-
-    stream_ids_with_version =
-      Enum.map(stream_ids, fn
-        stream_id -> {stream_id, 0}
-      end)
-
-    Reader.stream(stream_ids_with_version, :desc, @default_chunk_size, limit)
-  end
-
+  Takes the same arguments as `stream_forward/2`, except that `:count` defaults to
+  #{@default_count}, since the whole result is held in memory. Pass `count: nil`
+  to read everything.
+  """
   def read_stream_forward(stream_id, opts \\ []) do
-    stream_id |> stream_forward(opts) |> Enum.to_list()
+    stream_id |> stream_forward(with_default_count(opts)) |> Enum.to_list()
   end
 
-  def read_stream_backward(stream_id, opts) when is_binary(stream_id) do
-    stream_id |> stream_backward(opts) |> Enum.to_list()
+  @doc """
+  Reads the events in `stream_id` into a list, newest first.
+
+  Takes the same arguments as `stream_backward/2`, except that `:count` defaults
+  to #{@default_count}, as in `read_stream_forward/2`.
+  """
+  def read_stream_backward(stream_id, opts \\ []) do
+    stream_id |> stream_backward(with_default_count(opts)) |> Enum.to_list()
   end
 
   @doc """
@@ -101,9 +101,9 @@ defmodule EventstoreSqlite do
     case EventstoreSqlite.RepoWrite.transact(
            fn repo ->
              with :ok <- validate_version(repo, stream_id, expected_version),
-                  {_, inserted_events} <- insert_events(repo, events),
-                  :ok <- insert_in_stream(repo, stream_id, inserted_events),
-                  :ok <- insert_in_stream(repo, @all_stream_id, inserted_events) do
+                  :ok <- insert_events(repo, events),
+                  :ok <- insert_in_stream(repo, stream_id, events),
+                  :ok <- insert_in_stream(repo, @all_stream_id, events) do
                {:ok, :done}
              end
            end,
@@ -124,10 +124,20 @@ defmodule EventstoreSqlite do
   `version` is the first event version to deliver: `0` (the default) replays the whole
   stream first, and `:current` skips existing history so only events appended after
   subscribing are delivered.
+
+  Options:
+
+    * `:batch_size` - the most events delivered in one `{:events, events}` message
+      (default #{@default_count}). A subscriber catching up on history receives it
+      as consecutive messages of at most this many events. Subscribers of the same
+      stream are served together, so a message can hold fewer events when another
+      subscriber of that stream asked for a smaller batch.
   """
-  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil)
+  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil, opts \\ [])
       when is_integer(version) or version == :current do
-    EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter)
+    batch_size = positive_integer_option!(opts, :batch_size, @default_count)
+
+    EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter, batch_size)
   end
 
   @doc """
@@ -175,11 +185,32 @@ defmodule EventstoreSqlite do
   end
 
   defp insert_events(repo, events) do
-    repo.insert_all(
-      Event,
-      Enum.map(events, &Map.drop(&1, [:__struct__, :__meta__])),
-      returning: [:id]
-    )
+    events
+    |> Enum.chunk_every(@insert_chunk_size)
+    |> Enum.each(fn chunk ->
+      repo.insert_all(Event, Enum.map(chunk, &Map.drop(&1, [:__struct__, :__meta__])))
+    end)
+  end
+
+  defp with_start_versions(stream_id) when is_binary(stream_id), do: [{stream_id, 0}]
+
+  defp with_start_versions({stream_id, start_version}) when is_binary(stream_id), do: [{stream_id, start_version}]
+
+  defp with_start_versions(stream_ids) when is_list(stream_ids) do
+    Enum.flat_map(stream_ids, &with_start_versions/1)
+  end
+
+  defp reader_opts(opts) do
+    {positive_integer_option!(opts, :chunk_size, @default_chunk_size), Keyword.get(opts, :count)}
+  end
+
+  defp with_default_count(opts), do: Keyword.put_new(opts, :count, @default_count)
+
+  defp positive_integer_option!(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 -> value
+      value -> raise ArgumentError, "expected #{inspect(key)} to be a positive integer, got: #{inspect(value)}"
+    end
   end
 
   defp insert_in_stream(repo, stream_id, events) do

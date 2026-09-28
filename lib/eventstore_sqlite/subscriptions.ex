@@ -10,8 +10,10 @@ defmodule EventstoreSqlite.Subscriptions do
     GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   end
 
-  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil) do
-    GenServer.call(__MODULE__, {:subscribe_to_stream, subscriber_pid, stream, version, filter})
+  @default_batch_size 10_000
+
+  def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil, batch_size \\ @default_batch_size) do
+    GenServer.call(__MODULE__, {:subscribe_to_stream, subscriber_pid, stream, version, filter, batch_size})
   end
 
   def ping(stream) do
@@ -32,14 +34,14 @@ defmodule EventstoreSqlite.Subscriptions do
   end
 
   @impl true
-  def handle_call({:subscribe_to_stream, subscriber_pid, stream, version, filter}, _from, state) do
+  def handle_call({:subscribe_to_stream, subscriber_pid, stream, version, filter, batch_size}, _from, state) do
     version = resolve_version(stream, version)
 
     state =
       state
       |> monitor_subscriber(subscriber_pid)
       |> update_subscribed_streams(stream, version)
-      |> update_subscribers(subscriber_pid, stream, version, filter)
+      |> update_subscribers(subscriber_pid, stream, version, filter, batch_size)
       |> update_streams_to_handle(stream)
 
     {:reply, :ok, state, {:continue, :handle_stream}}
@@ -62,8 +64,7 @@ defmodule EventstoreSqlite.Subscriptions do
 
     case stream do
       {:value, stream} ->
-        state = send_to_stream(state, stream)
-        state = %{state | streams_to_handle: streams_to_handle}
+        state = send_to_stream(%{state | streams_to_handle: streams_to_handle}, stream)
         {:noreply, state, {:continue, :handle_stream}}
 
       :empty ->
@@ -115,7 +116,7 @@ defmodule EventstoreSqlite.Subscriptions do
   defp remove_subscriber(state, pid) do
     {emptied_streams, subscribers} =
       Enum.reduce(state.subscribers, {[], %{}}, fn {stream, subs}, {emptied, acc} ->
-        case Enum.reject(subs, fn {sub_pid, _version, _filter} -> sub_pid == pid end) do
+        case Enum.reject(subs, fn {sub_pid, _version, _filter, _batch_size} -> sub_pid == pid end) do
           [] -> {[stream | emptied], acc}
           subs -> {emptied, Map.put(acc, stream, subs)}
         end
@@ -129,10 +130,12 @@ defmodule EventstoreSqlite.Subscriptions do
     }
   end
 
-  defp update_subscribers(state, subscriber_pid, stream, version, filter) do
+  defp update_subscribers(state, subscriber_pid, stream, version, filter, batch_size) do
+    subscriber = {subscriber_pid, version, filter, batch_size}
+
     subscribers =
-      Map.update(state.subscribers, stream, [{subscriber_pid, version, filter}], fn other ->
-        [{subscriber_pid, version, filter} | other]
+      Map.update(state.subscribers, stream, [subscriber], fn other ->
+        [subscriber | other]
       end)
 
     %{state | subscribers: subscribers}
@@ -147,7 +150,8 @@ defmodule EventstoreSqlite.Subscriptions do
 
   defp send_to_stream(state, stream, subscribers) do
     version_to_read = Map.get(state.subscribed_streams, stream, 0)
-    events = EventstoreSqlite.read_stream_forward({stream, version_to_read})
+    batch_size = subscribers |> Enum.map(fn {_pid, _version, _filter, batch_size} -> batch_size end) |> Enum.min()
+    events = EventstoreSqlite.read_stream_forward({stream, version_to_read}, count: batch_size)
 
     new_version_to_read =
       case List.last(events) do
@@ -156,7 +160,7 @@ defmodule EventstoreSqlite.Subscriptions do
       end
 
     subscribers =
-      Enum.map(subscribers, fn {subscriber_pid, version, filter} ->
+      Enum.map(subscribers, fn {subscriber_pid, version, filter, subscriber_batch_size} ->
         events =
           Enum.filter(events, fn event ->
             event.stream_version >= version
@@ -169,13 +173,15 @@ defmodule EventstoreSqlite.Subscriptions do
 
         new_version = if version > new_version_to_read, do: version, else: new_version_to_read
 
-        {subscriber_pid, new_version, filter}
+        {subscriber_pid, new_version, filter, subscriber_batch_size}
       end)
 
-    %{
+    state = %{
       state
       | subscribers: Map.put(state.subscribers, stream, subscribers),
         subscribed_streams: Map.put(state.subscribed_streams, stream, new_version_to_read)
     }
+
+    if length(events) == batch_size, do: update_streams_to_handle(state, stream), else: state
   end
 end

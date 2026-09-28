@@ -815,6 +815,70 @@ defmodule EventstoreSqliteTest do
     end
   end
 
+  describe "append_to_stream/2 large appends" do
+    test "more events than fit in one SQLite statement are appended in a single call" do
+      events = for i <- 1..7_000, do: %FooTestEvent{text: "#{i}"}
+
+      assert :ok = EventstoreSqlite.append_to_stream("large", events)
+
+      assert Enum.map(stream_forward("large"), & &1.data) == events
+      assert Enum.map(stream_forward("$all"), & &1.stream_version) == Enum.to_list(0..6_999)
+    end
+  end
+
+  describe "stream_forward/2 and stream_backward/2 :chunk_size" do
+    setup do
+      events = for i <- 0..4, do: %FooTestEvent{text: "#{i}"}
+      :ok = EventstoreSqlite.append_to_stream("chunked", events)
+      {:ok, events: events}
+    end
+
+    test "a small chunk size returns every event in order", %{events: events} do
+      assert Enum.map(stream_forward("chunked", chunk_size: 2), & &1.data) == events
+      assert Enum.map(stream_backward("chunked", chunk_size: 2), & &1.data) == Enum.reverse(events)
+    end
+
+    test "combines with :count and a start version" do
+      assert [2, 3, 4] = Enum.map(stream_forward({"chunked", 2}, chunk_size: 2), & &1.stream_version)
+      assert [1, 2, 3] = Enum.map(stream_forward({"chunked", 1}, chunk_size: 2, count: 3), & &1.stream_version)
+      assert [4, 3, 2] = Enum.map(stream_backward({"chunked", 2}, chunk_size: 2), & &1.stream_version)
+      assert [4, 3] = Enum.map(stream_backward("chunked", chunk_size: 1, count: 2), & &1.stream_version)
+    end
+
+    test "is accepted by read_stream_forward/2 and read_stream_backward/2", %{events: events} do
+      assert Enum.map(EventstoreSqlite.read_stream_forward("chunked", chunk_size: 2), & &1.data) == events
+
+      assert Enum.map(EventstoreSqlite.read_stream_backward("chunked", chunk_size: 2), & &1.data) ==
+               Enum.reverse(events)
+    end
+
+    test "must be a positive integer" do
+      for chunk_size <- [0, -1, "5", nil] do
+        assert_raise ArgumentError, ~r/:chunk_size/, fn -> stream_forward("chunked", chunk_size: chunk_size) end
+        assert_raise ArgumentError, ~r/:chunk_size/, fn -> stream_backward("chunked", chunk_size: chunk_size) end
+      end
+    end
+  end
+
+  describe "stream_backward/2 start versions" do
+    test "a list of streams can carry start versions" do
+      event = %FooTestEvent{text: "some text"}
+      :ok = EventstoreSqlite.append_to_stream("s1", [event, event, event])
+      :ok = EventstoreSqlite.append_to_stream("s2", [event, event])
+
+      assert [{"s2", 1}, {"s1", 2}, {"s1", 1}] =
+               [{"s1", 1}, {"s2", 1}]
+               |> stream_backward()
+               |> Enum.map(&{&1.stream_id, &1.stream_version})
+    end
+
+    test "read_stream_backward/1 reads without options" do
+      :ok = EventstoreSqlite.append_to_stream("s1", [%FooTestEvent{text: "a"}, %FooTestEvent{text: "b"}])
+
+      assert [1, 0] = Enum.map(EventstoreSqlite.read_stream_backward("s1"), & &1.stream_version)
+    end
+  end
+
   describe "list_streams/0" do
     test "no streams" do
       auto_assert([] <- EventstoreSqlite.list_streams())

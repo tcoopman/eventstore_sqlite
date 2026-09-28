@@ -271,7 +271,7 @@ defmodule EventstoreSqlite.SubscribeTest do
       :ok = GenServer.stop(dead)
 
       state = :sys.get_state(EventstoreSqlite.Subscriptions)
-      assert [{^alive, _version, _filter}] = state.subscribers["test-stream-1"]
+      assert [{^alive, _version, _filter, _batch_size}] = state.subscribers["test-stream-1"]
       assert Map.has_key?(state.subscribed_streams, "test-stream-1")
       refute Map.has_key?(state.monitors, dead)
 
@@ -302,6 +302,47 @@ defmodule EventstoreSqlite.SubscribeTest do
           %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}
         ] <- Subscriber.events(second)
       )
+    end
+  end
+
+  describe "subscribe_to_stream/5 :batch_size" do
+    test "history and new events arrive in messages of at most batch_size events" do
+      event = %FooTestEvent{text: "some text"}
+      :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event, event, event])
+
+      :ok = EventstoreSqlite.subscribe_to_stream(self(), "test-stream-1", 0, nil, batch_size: 2)
+
+      assert_receive {:events, [%{stream_version: 0}, %{stream_version: 1}]}
+      assert_receive {:events, [%{stream_version: 2}, %{stream_version: 3}]}
+      assert_receive {:events, [%{stream_version: 4}]}
+
+      :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event])
+
+      assert_receive {:events, [%{stream_version: 5}, %{stream_version: 6}]}
+      assert_receive {:events, [%{stream_version: 7}]}
+      refute_receive {:events, _}, 50
+    end
+
+    test "subscribers of the same stream share the smallest batch size" do
+      event = %FooTestEvent{text: "some text"}
+      {:ok, large} = Subscriber.subscribe("test-stream-1")
+      :ok = EventstoreSqlite.subscribe_to_stream(self(), "test-stream-1", 0, nil, batch_size: 1)
+
+      :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event])
+
+      assert_receive {:events, [%{stream_version: 0}]}
+      assert_receive {:events, [%{stream_version: 1}]}
+      assert [%{stream_version: 0}, %{stream_version: 1}] = Subscriber.events(large)
+    end
+
+    test "must be a positive integer" do
+      for batch_size <- [0, -1, "5", nil] do
+        assert_raise ArgumentError, ~r/:batch_size/, fn ->
+          EventstoreSqlite.subscribe_to_stream(self(), "test-stream-1", 0, nil, batch_size: batch_size)
+        end
+      end
+
+      refute Map.has_key?(:sys.get_state(EventstoreSqlite.Subscriptions).subscribers, "test-stream-1")
     end
   end
 
