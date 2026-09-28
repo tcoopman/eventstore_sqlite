@@ -25,5 +25,6 @@ defmodule EventstoreSqlite.RecordedEvent do
   end
 
   defp decode_metadata(nil), do: %{}
+  defp decode_metadata("null"), do: %{}
   defp decode_metadata(metadata), do: :erlang.binary_to_term(metadata)
 end

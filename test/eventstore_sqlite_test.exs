@@ -173,6 +173,39 @@ defmodule EventstoreSqliteTest do
                stream_forward(stream_id)
     end
 
+    test "an event written while metadata was a JSON map column reads back as an empty map" do
+      stream_id = "legacy-metadata"
+      event = %FooTestEvent{text: "legacy"}
+      event_id = Uniq.UUID.uuid7()
+      inserted_at = DateTime.to_iso8601(DateTime.truncate(DateTime.utc_now(), :second))
+
+      SQL.query!(
+        EventstoreSqlite.RepoWrite,
+        "INSERT INTO events (id, type, data, metadata, inserted_at) VALUES (?, ?, ?, 'null', ?)",
+        [event_id, Atom.to_string(FooTestEvent), :erlang.term_to_binary(event), inserted_at]
+      )
+
+      SQL.query!(
+        EventstoreSqlite.RepoWrite,
+        "INSERT INTO streams (stream_id, stream_version, inserted_at) VALUES (?, 1, ?)",
+        [stream_id, inserted_at]
+      )
+
+      SQL.query!(
+        EventstoreSqlite.RepoWrite,
+        "INSERT INTO stream_events (event_id, stream_id, stream_version, original_stream_id, original_stream_version) VALUES (?, ?, 0, ?, 0)",
+        [event_id, stream_id, stream_id]
+      )
+
+      assert %{rows: [["text", "null"]]} =
+               SQL.query!(EventstoreSqlite.RepoRead, "SELECT typeof(metadata), metadata FROM events", [])
+
+      assert [%EventstoreSqlite.RecordedEvent{id: ^event_id, data: ^event, metadata: metadata}] =
+               stream_forward(stream_id)
+
+      assert metadata == %{}
+    end
+
     test "bare events and NewEvents can be mixed in one append" do
       stream_id = "mixed"
       bare = %FooTestEvent{text: "bare"}
