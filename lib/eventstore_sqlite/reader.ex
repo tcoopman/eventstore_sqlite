@@ -15,6 +15,7 @@ defmodule EventstoreSqlite.Reader do
   """
   def stream(stream_ids_with_start_version, asc_or_desc, chunk_size, max_limit \\ nil)
       when asc_or_desc in [:asc, :desc] and is_integer(chunk_size) and chunk_size > 0 do
+    order_column = order_column(stream_ids_with_start_version)
     initial_state = {nil, 0}
 
     initial_state
@@ -31,12 +32,12 @@ defmodule EventstoreSqlite.Reader do
             end
 
           raw_chunk =
-            fetch_chunk(stream_ids_with_start_version, asc_or_desc, limit_for_query, cursor)
+            fetch_chunk(stream_ids_with_start_version, order_column, asc_or_desc, limit_for_query, cursor)
 
           if raw_chunk == [] do
             nil
           else
-            next_cursor = List.last(raw_chunk).stream_event_id
+            next_cursor = List.last(raw_chunk).cursor
             new_count = count_so_far + length(raw_chunk)
 
             next_state = {next_cursor, new_count}
@@ -50,7 +51,10 @@ defmodule EventstoreSqlite.Reader do
     |> Stream.flat_map(& &1)
   end
 
-  defp fetch_chunk(stream_ids_with_start_version, asc_or_desc, limit, cursor) do
+  defp order_column([_single_stream]), do: :stream_version
+  defp order_column(_streams), do: :id
+
+  defp fetch_chunk(stream_ids_with_start_version, order_column, asc_or_desc, limit, cursor) do
     where_streams =
       stream_ids_with_start_version
       |> Enum.map(fn {stream_id, start_version} ->
@@ -64,8 +68,8 @@ defmodule EventstoreSqlite.Reader do
       if cursor do
         cursor_where =
           case asc_or_desc do
-            :asc -> dynamic([s], s.id > ^cursor)
-            :desc -> dynamic([s], s.id < ^cursor)
+            :asc -> dynamic([s], field(s, ^order_column) > ^cursor)
+            :desc -> dynamic([s], field(s, ^order_column) < ^cursor)
           end
 
         from([s] in query, where: ^cursor_where)
@@ -78,7 +82,7 @@ defmodule EventstoreSqlite.Reader do
         join: event in Event,
         on: s.event_id == event.id,
         select: %{
-          stream_event_id: s.id,
+          cursor: field(s, ^order_column),
           id: event.id,
           type: event.type,
           data: event.data,
@@ -88,7 +92,7 @@ defmodule EventstoreSqlite.Reader do
           stream_version: s.stream_version
         },
         limit: ^limit,
-        order_by: [{^asc_or_desc, s.id}]
+        order_by: [{^asc_or_desc, field(s, ^order_column)}]
       )
 
     EventstoreSqlite.RepoRead.all(final_query)
