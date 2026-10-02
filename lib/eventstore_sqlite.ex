@@ -1,5 +1,77 @@
 defmodule EventstoreSqlite do
-  @moduledoc false
+  @moduledoc """
+  An append-only, SQLite-backed event store for Elixir event structs.
+
+  Events are appended to named streams. Stream versions are zero-based: the
+  first event in a stream has version `0`; a stream containing `n` events has
+  next version `n`. Every event appended to an application stream is also
+  represented in the system stream `"$all"`.
+
+  ## Quick start
+
+      event = %OrderPlaced{order_id: order_id}
+
+      :ok = EventstoreSqlite.append_to_stream("orders/123", [event], :no_stream)
+
+      [recorded] = EventstoreSqlite.read_stream_forward("orders/123")
+      recorded.data
+      #=> %OrderPlaced{order_id: order_id}
+
+  Use `stream_forward/2` or `stream_backward/2` when a lazy, chunked read is
+  preferable to building a list. Use `subscribe_to_stream/5` to receive new
+  events as messages in a process.
+
+  ## Recorded events and ordering
+
+  Reads and subscriptions return `EventstoreSqlite.RecordedEvent` structs; see
+  that module for their fields, including how events read from `"$all"` name
+  the stream they were appended to.
+
+  Reading several streams merges their rows in database insertion order. If
+  the selection includes both an application stream and `"$all"`, an event
+  present in both is returned twice—once for each stream row. Forward and
+  backward reads use opposite orders. A requested start version is inclusive.
+
+  Archiving a stream removes its live rows, including its rows in `"$all"`.
+  Consequently, `"$all"` positions can have gaps after an archive; positions are
+  not renumbered or reused. A saved `"$all"` position is a cursor, not an event
+  count.
+
+  ## System streams
+
+  `"$all"` contains a row for each live event of an application stream. The
+  `"$archives"` stream contains
+  `%EventstoreSqlite.SystemEvents.StreamArchived{}` notifications and is created
+  on the first archive. Each notification identifies the archived stream and
+  archive ID, and gives its event count. Both names are reserved:
+  `append_to_stream/3` returns `{:error, :system_stream}` for them. Archive
+  notifications are not themselves added to `"$all"`.
+
+  ## Persistence and event data
+
+  Event data and metadata are serialized using Erlang term encoding. Events
+  must be Elixir structs; use `EventstoreSqlite.NewEvent` to provide metadata
+  or a caller-supplied UUID event ID. Keep event modules and their serialized
+  shape compatible with the data already stored in the database.
+
+  ## Public API
+
+    * `append_to_stream/3` — atomically append a batch, optionally guarded by an
+      expected stream version.
+    * `stream_forward/2`, `stream_backward/2` — lazily read events in chunks.
+    * `read_stream_forward/2`, `read_stream_backward/2` — read into a list, with
+      a default limit of 10,000 events.
+    * `subscribe_to_stream/5` — deliver events and archive notifications to a
+      process.
+    * `archive_stream/2` — move a whole stream out of the live store while
+      retaining its records in archive tables.
+    * `list_streams/0` — list live stream names, including system streams that
+      currently exist.
+
+  There is no public API to read or unarchive archived events. See
+  `archive_stream/2` for why rolling back the library after an archive is not
+  supported.
+  """
   import Ecto.Query, only: [from: 2]
 
   alias Ecto.Adapters.SQL
@@ -19,23 +91,32 @@ defmodule EventstoreSqlite do
   @insert_chunk_size 1_000
 
   @doc """
-  Returns a lazy stream of the events in `stream_id`, oldest first.
+  Returns a lazy stream of recorded events, oldest first.
 
-  `stream_id` is a stream id, a `{stream_id, start_version}` tuple, or a list of
-  either to read several streams interleaved in append order.
+  `stream_id` may be:
 
-  Every event carries `stream_id` / `stream_version` of the stream it was read
-  from, and `original_stream_id` / `original_stream_version` of the stream it was
-  appended to. They differ only for events read from `"$all"`, whose
-  `stream_version` is the event's position in `"$all"`.
+    * a stream name, such as `"orders/123"`;
+    * `{stream_name, start_version}`, to start at that version (inclusive); or
+    * a non-empty list of stream names and/or `{stream_name, start_version}`
+      tuples, to merge multiple streams. An empty list raises
+      `Enum.EmptyError`.
+
+  For a multi-stream read, rows are ordered by their database insertion order.
+  Selecting both an application stream and `"$all"` returns each matching event
+  twice, once for each stream row. See `EventstoreSqlite.RecordedEvent` for the
+  meaning of `stream_id`, `stream_version`, and the `original_*` fields.
 
   Options:
 
-    * `:count` - stop after this many events. Defaults to no limit: the stream is
-      read in chunks, so reading a whole stream does not load it into memory.
-    * `:chunk_size` - how many events to fetch per database query (default
-      #{@default_chunk_size}). A chunk's raw rows stay in memory until the consumer
-      has worked through it, so lower this for streams of large events.
+    * `:count` — maximum total number of events to emit across all selected
+      streams. Defaults to `nil` (no limit).
+    * `:chunk_size` — number of rows fetched per database query (default
+      #{@default_chunk_size}); it must be a positive integer. The query result
+      for one chunk is held in memory while it is consumed; reduce this for very
+      large event payloads.
+
+  The stream is lazy: enumeration performs database reads. A read of a stream
+  that does not exist emits no events.
   """
   def stream_forward(stream_id, opts \\ []) do
     {chunk_size, limit} = reader_opts(opts)
@@ -44,10 +125,13 @@ defmodule EventstoreSqlite do
   end
 
   @doc """
-  Returns a lazy stream of the events in `stream_id`, newest first, down to the
-  start version if one is given.
+  Returns a lazy stream of recorded events, newest first.
 
-  Takes the same `stream_id` shapes and options as `stream_forward/2`.
+  Accepts the same stream selectors and options as `stream_forward/2`. A
+  `{stream_name, start_version}` selector sets an inclusive lower bound: events
+  newer than that version are emitted first, down through the specified
+  version. For a multi-stream read, rows are emitted in reverse database
+  insertion order. `:count`, when provided, limits the total number emitted.
   """
   def stream_backward(stream_id, opts \\ []) do
     {chunk_size, limit} = reader_opts(opts)
@@ -56,32 +140,34 @@ defmodule EventstoreSqlite do
   end
 
   @doc """
-  Reads the events in `stream_id` into a list, oldest first.
+  Reads recorded events into a list, oldest first.
 
-  Takes the same arguments as `stream_forward/2`, except that `:count` defaults to
-  #{@default_count}, since the whole result is held in memory. Pass `count: nil`
-  to read everything.
+  Accepts the same selectors and options as `stream_forward/2`. Unlike
+  `stream_forward/2`, `:count` defaults to #{@default_count}, because the result
+  is accumulated in memory. Pass `count: nil` to read all matching events.
   """
   def read_stream_forward(stream_id, opts \\ []) do
     stream_id |> stream_forward(with_default_count(opts)) |> Enum.to_list()
   end
 
   @doc """
-  Reads the events in `stream_id` into a list, newest first.
+  Reads recorded events into a list, newest first.
 
-  Takes the same arguments as `stream_backward/2`, except that `:count` defaults
-  to #{@default_count}, as in `read_stream_forward/2`.
+  Accepts the same selectors and options as `stream_backward/2`. `:count`
+  defaults to #{@default_count}, because the result is accumulated in memory.
+  Pass `count: nil` to read all matching events.
   """
   def read_stream_backward(stream_id, opts \\ []) do
     stream_id |> stream_backward(with_default_count(opts)) |> Enum.to_list()
   end
 
   @doc """
-  Appends `events` to `stream_id`.
+  Atomically appends a batch of events to `stream_id` and to the system stream
+  `"$all"`.
 
-  Each element of `events` is either a bare event struct, or an
-  `EventstoreSqlite.NewEvent` carrying metadata and/or a caller-supplied event
-  id. The two shapes can be mixed in one call.
+  Each item must be an event struct or an `%EventstoreSqlite.NewEvent{}`; the
+  two forms may be mixed. Use `NewEvent` to attach metadata or choose an event
+  ID:
 
       append_to_stream("scan-42", [
         %TicketScanned{ticket_id: id},
@@ -91,17 +177,31 @@ defmodule EventstoreSqlite do
         }
       ])
 
-  `expected_version` guards the append: `:any_version` (the default),
-  `:no_stream`, `:stream_exists`, or `{:version, n}`. A mismatch returns
-  `{:error, :wrong_expected_version}` and writes nothing.
+  The entire batch is one write transaction: a failed append does not leave a
+  partial batch. A successful non-empty append returns `:ok`.
 
-  `"$all"` and `"$archives"` are maintained by the store itself: appending to
-  them returns `{:error, :system_stream}` and writes nothing.
+  `expected_version` controls which current stream state is accepted:
 
-  Supplying your own id lets an event reference a sibling it is appended
-  alongside. The id must be a UUID string and must not already exist in the
-  store — a malformed id raises `ArgumentError` and a duplicate raises out of the
-  write transaction, leaving the whole batch unwritten.
+    * `:any_version` — do not check the current state (default).
+    * `:no_stream` — succeed only if the stream does not exist.
+    * `:stream_exists` — succeed only if the stream exists.
+    * `{:version, n}` — succeed only if the stream's current version is `n`.
+      This is the next version / event count, not the last event's version.
+      For example, after versions `0..2`, the current value is `3`.
+      `{:version, 0}` also succeeds when the stream does not yet exist, like
+      `:no_stream`.
+
+  A mismatch returns `{:error, :wrong_expected_version}` and writes nothing.
+  `"$all"` and `"$archives"` are reserved; appending to either returns
+  `{:error, :system_stream}`. Appending an empty list to an ordinary stream is
+  a no-op that returns `:ok` without creating a stream or checking
+  `expected_version`.
+
+  Bare event structs receive a generated UUIDv7 ID. A `NewEvent` may supply an
+  ID, which must be a UUID string not already present in the store. A malformed
+  supplied ID raises `ArgumentError`; a duplicate ID raises from the database
+  write and aborts the whole batch. Supplying an ID is useful when one event's
+  metadata refers to a sibling event in the same batch.
   """
   def append_to_stream(stream_id, events, expected_version \\ :any_version)
 
@@ -133,33 +233,51 @@ defmodule EventstoreSqlite do
   end
 
   @doc """
-  Archives the whole of `stream_id`, so that the store looks as if the stream
-  never existed.
+  Archives the complete live stream named `stream_id`.
 
-  Afterwards no read, `list_streams/0` or `"$all"` returns its events, and the
-  name is free again: the next append to `stream_id` starts a new stream at
-  version 0. The events themselves are kept in the archive tables, and an
-  `EventstoreSqlite.SystemEvents.StreamArchived` event is appended to
-  `"$archives"`.
+  The operation copies the stream's event IDs, stream versions, and old
+  `"$all"` positions to archive tables, then removes its rows from the live
+  stream and from `"$all"`. Event records remain in the database, but there is
+  currently no public API to read or unarchive archived data.
 
-  `expected_version` guards the archive like it guards `append_to_stream/3`.
-  Returns `{:error, :stream_not_found}` when the stream doesn't exist,
-  `{:error, :wrong_expected_version}` on a version mismatch, and
-  `{:error, :system_stream}` for `"$all"` and `"$archives"`. Nothing is archived
-  in those cases.
+  The stream name becomes available for a new stream. A later append with
+  `:no_stream` starts that new stream at version `0`; archiving the reused name
+  again creates a separate archive record with a new `archive_id`.
 
-  Subscribers of `stream_id` receive `{:stream_archived, stream_id}` and their
-  subscription ends; to follow the new stream of the same name, subscribe again.
-  `"$all"` subscribers get no message: the archived events leave gaps in
-  `"$all"` positions, and a projection that already processed them learns about
-  the archive by subscribing to `"$archives"`.
+  The operation also appends an
+  `%EventstoreSqlite.SystemEvents.StreamArchived{}` event to `"$archives"`.
+  It is not added to `"$all"`. Existing `"$archives"` subscribers receive it;
+  subscribers to the archived stream receive `{:stream_archived, stream_id}`
+  and are unsubscribed. Events appended before the archive that had not yet
+  been delivered to them are not delivered: the archive message is the last
+  thing they receive for that stream. They must subscribe again to follow a new
+  stream with that name. `"$all"` subscribers receive no archive notification;
+  their positions can have gaps, and projections that already processed the
+  removed events must use `"$archives"` to learn about the archive.
 
-  Archived events keep their ids, so a later append with a caller-supplied id
-  equal to an archived event's id still fails as a duplicate.
+  `expected_version` uses the same rules as `append_to_stream/3` and is checked
+  against the live stream. Because a missing stream returns
+  `{:error, :stream_not_found}` before the version is checked, `:no_stream` and
+  `{:version, 0}` never succeed. The result is:
 
-  Once a stream has been archived, rolling back to a version of this library
-  without archiving is not supported: that version can't see the archive tables
-  and treats `"$archives"` as an ordinary stream.
+    * `:ok` — the archive committed;
+    * `{:error, :stream_not_found}` — no live stream has that name;
+    * `{:error, :wrong_expected_version}` — the expected state did not match;
+    * `{:error, :system_stream}` — `stream_id` is `"$all"` or `"$archives"`.
+
+  These returned errors leave the store unchanged. An integrity inconsistency
+  (for example, a stream row whose event rows do not match its recorded version)
+  raises and rolls back the transaction rather than archiving incomplete data.
+
+  Archived event IDs remain globally reserved, so a caller-supplied ID from an
+  archived event cannot be reused. Once any stream has been archived, rolling
+  back to a library version without archive support is not supported; that
+  version cannot see the archive tables and treats `"$archives"` as an ordinary
+  stream.
+
+  The archive runs inside the subscription process, so that subscription cursors
+  change in order with it. This call waits, without a timeout, until the archive
+  has finished, and no subscriber receives events while it runs.
   """
   def archive_stream(stream_id, expected_version \\ :any_version)
 
@@ -172,23 +290,43 @@ defmodule EventstoreSqlite do
   end
 
   @doc """
-  Subscribes `subscriber_pid` to `stream`; events arrive as `{:events, [RecordedEvent.t()]}` messages.
+  Subscribes a process to a stream. Returns `:ok` after registering the
+  subscription. The subscriber receives messages of the form
+  `{:events, [recorded_event]}` where each item is an
+  `EventstoreSqlite.RecordedEvent`.
 
-  `version` is the first event version to deliver: `0` (the default) replays the whole
-  stream first, and `:current` skips existing history so only events appended after
-  subscribing are delivered.
+  `version` is the first stream version to deliver:
 
-  When `stream` is archived (see `archive_stream/2`), the subscriber receives
-  `{:stream_archived, stream}` and the subscription ends. Subscribe again to
-  follow the new stream of the same name.
+    * `0` (default) replays all currently available history, then follows new
+      appends;
+    * a non-negative integer starts at that version, inclusive;
+    * `:current` skips the history present when the subscription is registered
+      and follows later events. For a stream that does not exist yet,
+      `:current` behaves like version `0`.
+
+  When the stream is archived, the process receives
+  `{:stream_archived, stream_id}` and that subscription ends; events appended
+  before the archive that had not been delivered yet are not delivered.
+  Subscribe again to follow a new stream with the same name. A `"$all"`
+  subscriber is not sent this message; archived events simply disappear from
+  future reads, leaving position gaps. Subscribe to `"$archives"` to receive
+  archive notifications.
+  Subscriber processes are monitored; their registrations are removed when
+  they terminate. There is no separate unsubscribe function. Archive
+  transactions run through the subscription process to keep cursor changes
+  ordered; a large archive can temporarily delay delivery processing for other
+  subscriptions.
 
   Options:
 
-    * `:batch_size` - the most events delivered in one `{:events, events}` message
-      (default #{@default_count}). A subscriber catching up on history receives it
-      as consecutive messages of at most this many events. Subscribers of the same
-      stream are served together, so a message can hold fewer events when another
-      subscriber of that stream asked for a smaller batch.
+    * `:batch_size` — maximum number of events in one `{:events, events}`
+      message (default #{@default_count}); it must be a positive integer.
+      Catch-up history is delivered in consecutive batches. Subscribers to the
+      same stream are served together using the smallest requested batch size,
+      so a subscriber may receive fewer events per message than its own limit.
+
+  `filter` is retained as an argument for compatibility but is currently not
+  applied; pass `nil` unless using a version that implements filtering.
   """
   def subscribe_to_stream(subscriber_pid, stream, version \\ 0, filter \\ nil, opts \\ [])
       when is_integer(version) or version == :current do
@@ -201,7 +339,12 @@ defmodule EventstoreSqlite do
   def system_streams, do: @system_streams
 
   @doc """
-  Lists all streams in the eventstore
+  Returns the names of all currently live streams, sorted lexicographically.
+
+  `"$all"` appears after the first event has been appended. `"$archives"`
+  appears after the first stream has been archived. Archived application stream
+  names do not appear; a name may reappear if a new live stream is created with
+  that name.
   """
   def list_streams do
     query =
