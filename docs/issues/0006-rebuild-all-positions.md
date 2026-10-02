@@ -1,8 +1,11 @@
 # Issue — rebuilding `$all` leaves a high-water mark that the next append collides with
 
-- **Status:** Open (noted 2026-10-02). Not reproduced by a test yet; found by
-  reading `Migration.intial_fill_all/0` while designing 0005, and confirmed in
-  review. Blocks 0005.
+- **Status:** Built 2026-10-02, in review. Blocks 0005. All problems below were
+  reproduced by tests before the fix (0/6 passing). One symptom differs from what
+  was predicted: on a store without a `$all` row, the rebuild itself fails with
+  `FOREIGN KEY constraint failed` (the `$all` rows reference `streams`), rather
+  than the next append colliding. Rebuilding `$all` on a copy of `bench.db`
+  (696 585 events) takes 2.3 s.
 - **Found via:** 0005 (archive stream) needs the rebuild to skip `$archives`.
 
 ## Problem

@@ -151,6 +151,9 @@ defmodule EventstoreSqlite do
     EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter, batch_size)
   end
 
+  @doc false
+  def system_streams, do: @system_streams
+
   @doc """
   Lists all streams in the eventstore
   """

@@ -4,29 +4,45 @@ defmodule EventstoreSqlite.Migration do
 
   @all_stream_id "$all"
 
+  @doc """
+  Rebuilds `$all` from the events of every non-system stream.
+
+  `$all` is renumbered `0..n-1` in the order the events were appended, so every
+  `$all` position saved before the rebuild is invalid afterwards: `$all`
+  subscribers have to start over.
+  """
   def intial_fill_all do
     EventstoreSqlite.RepoWrite.transact(fn repo ->
-      SQL.query!(repo, ~s"""
-      DELETE FROM stream_events WHERE stream_id == '#{@all_stream_id}';
-      """)
+      system_streams = EventstoreSqlite.system_streams()
+      placeholders = Enum.map_join(1..length(system_streams), ", ", &"?#{&1 + 1}")
 
-      SQL.query!(repo, ~s"""
-      WITH stream_events_not_all (id, event_id, stream_id, stream_version)
-      AS (select id, event_id, stream_id, stream_version from stream_events where stream_id <> '#{@all_stream_id}')
-      INSERT INTO stream_events (event_id, stream_id, stream_version, original_stream_id, original_stream_version)
-      SELECT
-        stream_events_not_all.event_id, '#{@all_stream_id}', stream_events_not_all.id, stream_events_not_all.stream_id, stream_events_not_all.stream_version
-      FROM stream_events_not_all ORDER BY event_id
-      RETURNING 1
-      """)
+      SQL.query!(repo, "DELETE FROM stream_events WHERE stream_id = ?1", [@all_stream_id])
+      upsert_all_stream(repo, 0)
 
-      SQL.query!(repo, ~s"""
-      UPDATE streams SET stream_version = (select max(stream_version) from stream_events where stream_id='$all')
-      where stream_id = '$all'
-      """)
+      %{num_rows: count} =
+        SQL.query!(
+          repo,
+          """
+          INSERT INTO stream_events (event_id, stream_id, stream_version, original_stream_id, original_stream_version)
+          SELECT event_id, ?1, row_number() OVER (ORDER BY id) - 1, stream_id, stream_version
+          FROM stream_events
+          WHERE stream_id NOT IN (#{placeholders})
+          ORDER BY id
+          """,
+          [@all_stream_id | system_streams]
+        )
+
+      upsert_all_stream(repo, count)
 
       {:ok, :done}
     end)
+  end
+
+  defp upsert_all_stream(repo, stream_version) do
+    repo.insert!(%EventstoreSqlite.Stream{stream_id: @all_stream_id, stream_version: stream_version},
+      on_conflict: [set: [stream_version: stream_version]],
+      conflict_target: :stream_id
+    )
   end
 
   @event_id_index "stream_events_fill_all_origins_event_id_index"
