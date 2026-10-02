@@ -92,6 +92,91 @@ defmodule EventstoreSqlite.Migration do
     end
   end
 
+  @doc """
+  Rebuilds `stream_events` with `stream_id` and `original_stream_id` declared as
+  `column_type` (`"TEXT"` or `"INTEGER"`), keeping every row, its `id`, the
+  table's AUTOINCREMENT counter, and its indexes and triggers.
+
+  With `"TEXT"`, values SQLite stored as numbers are turned back into the stream
+  names they came from. That is exact: the foreign key to `streams.stream_id`
+  (TEXT) only accepted a number whose text form equals the stream's name.
+  Raises, before anything is dropped, if the copied rows fail
+  `PRAGMA foreign_key_check`.
+  """
+  def rebuild_stream_events(repo, column_type) when column_type in ["TEXT", "INTEGER"] do
+    %{rows: schema_objects} =
+      SQL.query!(
+        repo,
+        "SELECT sql FROM sqlite_master WHERE tbl_name = 'stream_events' AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name"
+      )
+
+    SQL.query!(repo, "ALTER TABLE stream_events RENAME TO stream_events_old")
+
+    SQL.query!(repo, """
+    CREATE TABLE "stream_events" (
+      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+      "event_id" BLOB CONSTRAINT "stream_events_event_id_fkey" REFERENCES "events"("id"),
+      "stream_id" #{column_type} CONSTRAINT "stream_events_stream_id_fkey" REFERENCES "streams"("stream_id"),
+      "stream_version" INTEGER NOT NULL,
+      "original_stream_id" #{column_type} CONSTRAINT "stream_events_original_stream_id_fkey" REFERENCES "streams"("stream_id"),
+      "original_stream_version" INTEGER
+    )
+    """)
+
+    try do
+      SQL.query!(repo, """
+      INSERT INTO stream_events (id, event_id, stream_id, stream_version, original_stream_id, original_stream_version)
+      SELECT id, event_id, #{copy_stream_id("stream_id", column_type)}, stream_version,
+             #{copy_stream_id("original_stream_id", column_type)}, original_stream_version
+      FROM stream_events_old
+      ORDER BY id
+      """)
+    rescue
+      error in Exqlite.Error ->
+        if error.message =~ "FOREIGN KEY constraint failed" do
+          raise """
+          cannot rebuild stream_events with #{column_type} stream ids: some stream \
+          names can't be stored that way. #{column_type} columns turn a name like \
+          "007" into the number 7, which no longer matches its stream. Nothing was \
+          changed. Rolling back past this migration is only possible while no \
+          stream has such a name.
+          """
+        else
+          reraise error, __STACKTRACE__
+        end
+    end
+
+    case SQL.query!(repo, "PRAGMA foreign_key_check(stream_events)") do
+      %{rows: []} ->
+        :ok
+
+      %{rows: violations} ->
+        raise """
+        cannot rebuild stream_events: #{length(violations)} rows don't match a \
+        stream in streams after the copy. Nothing was changed. List them with:
+
+        PRAGMA foreign_key_check(stream_events);
+        """
+    end
+
+    %{rows: [[sequence]]} =
+      SQL.query!(repo, "SELECT max(seq) FROM sqlite_sequence WHERE name IN ('stream_events', 'stream_events_old')")
+
+    SQL.query!(repo, "DELETE FROM sqlite_sequence WHERE name = 'stream_events'")
+
+    if sequence do
+      SQL.query!(repo, "INSERT INTO sqlite_sequence (name, seq) VALUES ('stream_events', ?1)", [sequence])
+    end
+
+    SQL.query!(repo, "DROP TABLE stream_events_old")
+    Enum.each(schema_objects, fn [sql] -> SQL.query!(repo, sql) end)
+
+    :ok
+  end
+
+  defp copy_stream_id(column, "TEXT"), do: "CAST(#{column} AS TEXT)"
+  defp copy_stream_id(column, "INTEGER"), do: column
+
   @event_id_index "stream_events_fill_all_origins_event_id_index"
 
   @original_streams_query ~s"""
