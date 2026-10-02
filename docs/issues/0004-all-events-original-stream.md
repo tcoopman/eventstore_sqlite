@@ -1,6 +1,7 @@
 # Issue — events read from `$all` don't say which stream they came from
 
-- **Status:** Open (noted 2026-10-02). Build before 0005 (archive stream).
+- **Status:** Built 2026-10-02, in review. Build before 0006 and 0005. The
+  migration took 3.2 s on a copy of `bench.db` (696 585 `$all` rows).
 - **Found via:** brainstorming `archive_stream` (0005). A `$all` projection told
   that a stream was archived can't find that stream's events.
 
@@ -54,13 +55,13 @@ columns correctly for `$all`.
    CREATE TRIGGER no_update_stream_events ...;  -- unchanged
    ```
 
-   This relies on every `$all` row having **exactly one** non-`$all` partner row
-   with the same `event_id`. That should hold (there is no link API, and a
+   This relies on every `$all` row having **exactly one original stream**: one
+   non-`$all` row with the same `event_id`. That should hold (there is no link API, and a
    duplicate event id fails the append), but the migration doesn't trust it:
-   - **No partner** (e.g. a row from an earlier direct `append_to_stream("$all", …)`):
+   - **No original stream** (e.g. a row from an earlier direct `append_to_stream("$all", …)`):
      `UPDATE … FROM` skips the row, which keeps its wrong, non-NULL `"$all"`
      origin.
-   - **Several partners:** SQLite picks one of them arbitrarily.
+   - **Several original streams:** SQLite picks one of them arbitrarily.
 
    Neither case can be repaired by the `coalesce` fallback below, because the old
    values aren't NULL. So, inside the same transaction and before the `UPDATE`,
@@ -68,11 +69,11 @@ columns correctly for `$all`.
 
    ```sql
    SELECT
-     coalesce(sum(partners = 0), 0) AS orphans,
-     coalesce(sum(partners > 1), 0) AS ambiguous
+     coalesce(sum(original_streams = 0), 0) AS without_original_stream,
+     coalesce(sum(original_streams > 1), 0) AS with_several_original_streams
    FROM (
      SELECT (SELECT count(*) FROM stream_events o
-             WHERE o.event_id = a.event_id AND o.stream_id <> '$all') AS partners
+             WHERE o.event_id = a.event_id AND o.stream_id <> '$all') AS original_streams
      FROM stream_events a
      WHERE a.stream_id = '$all'
    );
@@ -84,6 +85,10 @@ columns correctly for `$all`.
    that lists them (`event_id` and `$all` position), and that they must be
    repaired by hand before migrating again. After the `UPDATE` it also asserts
    that no `$all` row still has `original_stream_id = '$all'`.
+
+   `stream_events` has no index on `event_id`, which made both the check and the
+   `UPDATE` quadratic (still running after 10 minutes on `bench.db`). The
+   migration creates a temporary `event_id` index for them and drops it again.
 
    `UPDATE … FROM` needs SQLite ≥ 3.33. Use correlated sub-selects if an older
    one has to be supported.
@@ -135,9 +140,17 @@ columns correctly for `$all`.
   it. The new `{:error, :system_stream}` is an extra return value of
   `append_to_stream` and goes in its `@doc`.
 
+## Rollout
+
+Stop every process running the old version before the migration runs, and don't
+start an old version again afterwards. The old `insert_in_stream` keeps writing
+`"$all"` as the origin of new `$all` rows, and the migration only fixes the rows
+that exist when it runs. The reader's `coalesce` doesn't help, because those
+values aren't NULL. (Raised in the gpt-luna review.)
+
 ## Open points
 
-- The migration enforces the one-partner rule itself, but run its check query
+- The migration enforces the exactly-one-original-stream rule itself, but run its check query
   on existing stores (tickets-admin prod) before deploying, so a failing
   migration doesn't come as a surprise during the rollout.
 
@@ -150,7 +163,7 @@ columns correctly for `$all`.
   rows the old way, migrate, read back) and leaves the trigger in place
   afterwards (an `UPDATE` still fails).
 - The migration aborts, changes nothing and keeps the trigger when a `$all` row
-  has no partner (a direct `$all` append written the old way), and likewise when
+  has no original stream (a direct `$all` append written the old way), and likewise when
   an event has two non-`$all` rows. The error names the count and the query.
 - The migration succeeds on an empty store (no `$all` rows).
 - `append_to_stream("$all", events)` returns `{:error, :system_stream}` and

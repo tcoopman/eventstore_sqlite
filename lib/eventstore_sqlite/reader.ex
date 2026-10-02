@@ -89,7 +89,9 @@ defmodule EventstoreSqlite.Reader do
           metadata: event.metadata,
           created_at: event.inserted_at,
           stream_id: s.stream_id,
-          stream_version: s.stream_version
+          stream_version: s.stream_version,
+          original_stream_id: coalesce(s.original_stream_id, s.stream_id),
+          original_stream_version: coalesce(s.original_stream_version, s.stream_version)
         },
         limit: ^limit,
         order_by: [{^asc_or_desc, field(s, ^order_column)}]
