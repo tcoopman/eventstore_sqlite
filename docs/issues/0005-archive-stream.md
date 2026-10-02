@@ -1,7 +1,9 @@
 # Issue — archive a whole stream so the live store looks as if it never existed
 
-- **Status:** Open (noted 2026-10-02). Design agreed; not built. Depends on 0004
-  and 0006.
+- **Status:** Done 2026-10-02 (archive streams). Builds on 0004 and 0006. On a copy of
+  `bench.db`, archiving the 696 585-event stream `test` takes 2.9 s; the race
+  test archives in the middle of 40 concurrent appends (13–16 land in the
+  archive, the rest in the new stream).
 - **Found via:** resetting test data (rehearsing a stream such as `ada` from
   scratch). May later become a real user-facing feature, so the design must not
   rule out unarchiving.
@@ -162,8 +164,9 @@ aborts with an actionable error, for example:
 > another name and remove it, then run the migration again.
 
 After the migration has run, `append_to_stream` refuses the name, so a collision
-can't appear later. The same check covers `$all`, though there only an earlier
-direct append (see 0004) can have put user events in it.
+can't appear later. `$all` needs no check here: user events can only have got
+into it through a direct append, and those rows have no original stream, so the
+0004 migration, which runs first, already aborts on them.
 
 The check runs in the migration rather than at `archive_stream` time, so the
 problem appears when upgrading, where someone is watching, and not on the
@@ -247,7 +250,11 @@ Nothing changes for a store that never calls `archive_stream`:
 
 **Rolling back the library:**
 
-- **Before the first archive:** safe. The new tables are empty and ignored.
+- **Before the first archive:** safe. The new tables are empty and ignored, and
+  the migration's `down` drops them.
+- **The migration's `down` refuses once anything is archived,** because dropping
+  the archive tables would lose which stream and versions the archived events
+  belonged to. (Raised in the gpt-luna review.)
 - **After an archive: not supported.** An older version can't see the archive
   tables. The archived events seem to have disappeared, `$archives` is an ordinary
   stream it will let anyone append to, and nothing stops it from appending

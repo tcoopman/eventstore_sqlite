@@ -1,6 +1,6 @@
 # Issue — rebuilding `$all` leaves a high-water mark that the next append collides with
 
-- **Status:** Built 2026-10-02, in review. Blocks 0005. All problems below were
+- **Status:** Done 2026-10-02 (rebuild all positions). All problems below were
   reproduced by tests before the fix (0/6 passing). One symptom differs from what
   was predicted: on a store without a `$all` row, the rebuild itself fails with
   `FOREIGN KEY constraint failed` (the `$all` rows reference `streams`), rather

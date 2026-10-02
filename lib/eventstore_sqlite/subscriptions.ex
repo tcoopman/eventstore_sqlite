@@ -20,6 +20,13 @@ defmodule EventstoreSqlite.Subscriptions do
     GenServer.cast(__MODULE__, {:ping, stream})
   end
 
+  def archive_stream(stream, archive) do
+    case GenServer.call(__MODULE__, {:archive_stream, stream, archive}, :infinity) do
+      {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
+      result -> result
+    end
+  end
+
   # Server (callbacks)
 
   @impl true
@@ -45,6 +52,17 @@ defmodule EventstoreSqlite.Subscriptions do
       |> update_streams_to_handle(stream)
 
     {:reply, :ok, state, {:continue, :handle_stream}}
+  end
+
+  def handle_call({:archive_stream, stream, archive}, _from, state) do
+    case run_archive(archive) do
+      {:ok, _} ->
+        state = state |> end_subscriptions(stream) |> update_streams_to_handle("$archives")
+        {:reply, :ok, state, {:continue, :handle_stream}}
+
+      error ->
+        {:reply, error, state}
+    end
   end
 
   @impl true
@@ -81,6 +99,40 @@ defmodule EventstoreSqlite.Subscriptions do
   end
 
   defp resolve_version(_stream, version) when is_integer(version), do: version
+
+  defp run_archive(archive) do
+    archive.()
+  catch
+    kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+  end
+
+  defp end_subscriptions(state, stream) do
+    {subscribers, remaining} = Map.pop(state.subscribers, stream, [])
+
+    Enum.each(subscribers, fn {pid, _version, _filter, _batch_size} -> send(pid, {:stream_archived, stream}) end)
+
+    state = %{state | subscribers: remaining, subscribed_streams: Map.delete(state.subscribed_streams, stream)}
+
+    subscribers
+    |> Enum.map(fn {pid, _version, _filter, _batch_size} -> pid end)
+    |> Enum.uniq()
+    |> Enum.reduce(state, &demonitor_if_unsubscribed/2)
+  end
+
+  defp demonitor_if_unsubscribed(pid, state) do
+    subscribed? =
+      Enum.any?(state.subscribers, fn {_stream, subs} ->
+        Enum.any?(subs, fn {sub_pid, _version, _filter, _batch_size} -> sub_pid == pid end)
+      end)
+
+    if subscribed? do
+      state
+    else
+      {ref, monitors} = Map.pop(state.monitors, pid)
+      Process.demonitor(ref, [:flush])
+      %{state | monitors: monitors}
+    end
+  end
 
   defp update_streams_to_handle(state, stream) do
     cond do

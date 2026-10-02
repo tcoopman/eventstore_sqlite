@@ -1,6 +1,6 @@
 # Issue — events read from `$all` don't say which stream they came from
 
-- **Status:** Built 2026-10-02, in review. Build before 0006 and 0005. The
+- **Status:** Done 2026-10-02 (track original_stream_id for $all). The
   migration took 3.2 s on a copy of `bench.db` (696 585 `$all` rows).
 - **Found via:** brainstorming `archive_stream` (0005). A `$all` projection told
   that a stream was archived can't find that stream's events.

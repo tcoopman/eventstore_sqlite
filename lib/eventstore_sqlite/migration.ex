@@ -45,6 +45,53 @@ defmodule EventstoreSqlite.Migration do
     )
   end
 
+  @archives_stream_id "$archives"
+
+  @doc """
+  Raises when a user stream named `$archives` already exists, because
+  eventstore_sqlite reserves that name for its archive log.
+  """
+  def check_archives_stream_free!(repo) do
+    %{rows: [[streams, events]]} =
+      SQL.query!(
+        repo,
+        """
+        SELECT (SELECT count(*) FROM streams WHERE stream_id = ?1),
+               (SELECT count(*) FROM stream_events WHERE stream_id = ?1)
+        """,
+        [@archives_stream_id]
+      )
+
+    if streams + events > 0 do
+      raise """
+      A stream named "#{@archives_stream_id}" already exists (#{events} events). \
+      eventstore_sqlite now reserves this name for its archive log. Copy its \
+      events to a stream with another name and remove it, then run the migration \
+      again.
+      """
+    end
+
+    :ok
+  end
+
+  @doc """
+  Raises when any stream has been archived, because dropping the archive tables
+  would lose which stream and versions the archived events belonged to.
+  """
+  def check_no_archives!(repo) do
+    case SQL.query!(repo, "SELECT count(*) FROM archived_streams") do
+      %{rows: [[0]]} ->
+        :ok
+
+      %{rows: [[count]]} ->
+        raise """
+        Refusing to drop the archive tables: they hold #{count} archived streams, \
+        and the archive tables are the only record of which stream and versions \
+        those events belonged to. Back up or restore them first.
+        """
+    end
+  end
+
   @event_id_index "stream_events_fill_all_origins_event_id_index"
 
   @original_streams_query ~s"""

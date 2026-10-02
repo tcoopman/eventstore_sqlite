@@ -2,11 +2,14 @@ defmodule EventstoreSqlite do
   @moduledoc false
   import Ecto.Query, only: [from: 2]
 
+  alias Ecto.Adapters.SQL
   alias EventstoreSqlite.Event
   alias EventstoreSqlite.Reader
+  alias EventstoreSqlite.SystemEvents.StreamArchived
 
   @all_stream_id "$all"
-  @system_streams [@all_stream_id]
+  @archives_stream_id "$archives"
+  @system_streams [@all_stream_id, @archives_stream_id]
   @default_count 10_000
   @default_chunk_size 1_000
 
@@ -92,8 +95,8 @@ defmodule EventstoreSqlite do
   `:no_stream`, `:stream_exists`, or `{:version, n}`. A mismatch returns
   `{:error, :wrong_expected_version}` and writes nothing.
 
-  `"$all"` is maintained by the store itself: appending to it returns
-  `{:error, :system_stream}` and writes nothing.
+  `"$all"` and `"$archives"` are maintained by the store itself: appending to
+  them returns `{:error, :system_stream}` and writes nothing.
 
   Supplying your own id lets an event reference a sibling it is appended
   alongside. The id must be a UUID string and must not already exist in the
@@ -130,11 +133,54 @@ defmodule EventstoreSqlite do
   end
 
   @doc """
+  Archives the whole of `stream_id`, so that the store looks as if the stream
+  never existed.
+
+  Afterwards no read, `list_streams/0` or `"$all"` returns its events, and the
+  name is free again: the next append to `stream_id` starts a new stream at
+  version 0. The events themselves are kept in the archive tables, and an
+  `EventstoreSqlite.SystemEvents.StreamArchived` event is appended to
+  `"$archives"`.
+
+  `expected_version` guards the archive like it guards `append_to_stream/3`.
+  Returns `{:error, :stream_not_found}` when the stream doesn't exist,
+  `{:error, :wrong_expected_version}` on a version mismatch, and
+  `{:error, :system_stream}` for `"$all"` and `"$archives"`. Nothing is archived
+  in those cases.
+
+  Subscribers of `stream_id` receive `{:stream_archived, stream_id}` and their
+  subscription ends; to follow the new stream of the same name, subscribe again.
+  `"$all"` subscribers get no message: the archived events leave gaps in
+  `"$all"` positions, and a projection that already processed them learns about
+  the archive by subscribing to `"$archives"`.
+
+  Archived events keep their ids, so a later append with a caller-supplied id
+  equal to an archived event's id still fails as a duplicate.
+
+  Once a stream has been archived, rolling back to a version of this library
+  without archiving is not supported: that version can't see the archive tables
+  and treats `"$archives"` as an ordinary stream.
+  """
+  def archive_stream(stream_id, expected_version \\ :any_version)
+
+  def archive_stream(stream_id, _) when stream_id in @system_streams, do: {:error, :system_stream}
+
+  def archive_stream(stream_id, expected_version) when is_binary(stream_id) do
+    EventstoreSqlite.Subscriptions.archive_stream(stream_id, fn ->
+      EventstoreSqlite.RepoWrite.transact(&archive_in_transaction(&1, stream_id, expected_version), mode: :immediate)
+    end)
+  end
+
+  @doc """
   Subscribes `subscriber_pid` to `stream`; events arrive as `{:events, [RecordedEvent.t()]}` messages.
 
   `version` is the first event version to deliver: `0` (the default) replays the whole
   stream first, and `:current` skips existing history so only events appended after
   subscribing are delivered.
+
+  When `stream` is archived (see `archive_stream/2`), the subscriber receives
+  `{:stream_archived, stream}` and the subscription ends. Subscribe again to
+  follow the new stream of the same name.
 
   Options:
 
@@ -265,9 +311,115 @@ defmodule EventstoreSqlite do
       VALUES #{placeholders}
       """
 
-      Ecto.Adapters.SQL.query!(repo, query, params)
+      SQL.query!(repo, query, params)
     end)
 
     {:ok, Enum.map(rows, fn {event_id, version, _origin} -> {event_id, {stream_id, version}} end)}
+  end
+
+  defp archive_in_transaction(repo, stream_id, expected_version) do
+    with {:ok, stream} <- fetch_stream(repo, stream_id),
+         :ok <- validate_version(repo, stream_id, expected_version) do
+      check_archivable!(repo, stream)
+      archive_id = insert_archived_stream(repo, stream_id)
+      copy_to_archive!(repo, archive_id, stream)
+      delete_stream(repo, stream_id)
+
+      append_system_event(repo, @archives_stream_id, %StreamArchived{
+        stream_id: stream_id,
+        archive_id: archive_id,
+        event_count: stream.stream_version
+      })
+
+      {:ok, :archived}
+    end
+  end
+
+  defp fetch_stream(repo, stream_id) do
+    case repo.one(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
+      nil -> {:error, :stream_not_found}
+      stream -> {:ok, stream}
+    end
+  end
+
+  defp check_archivable!(repo, stream) do
+    %{rows: [[stream_rows, all_rows]]} =
+      SQL.query!(
+        repo,
+        """
+        SELECT (SELECT count(*) FROM stream_events WHERE stream_id = ?1),
+               (SELECT count(*) FROM stream_events WHERE stream_id = ?2 AND original_stream_id = ?1)
+        """,
+        [stream.stream_id, @all_stream_id]
+      )
+
+    if stream_rows != stream.stream_version or all_rows != stream.stream_version do
+      raise """
+      cannot archive #{inspect(stream.stream_id)}: its version is \
+      #{stream.stream_version}, but it has #{stream_rows} rows and #{all_rows} \
+      rows in $all. Every event must be in its stream and in $all exactly once. \
+      Nothing was archived.
+      """
+    end
+  end
+
+  defp insert_archived_stream(repo, stream_id) do
+    %{rows: [[archive_id]]} =
+      SQL.query!(
+        repo,
+        """
+        INSERT INTO archived_streams (stream_id, stream_version, created_at, archived_at)
+        SELECT stream_id, stream_version, inserted_at, strftime('%Y-%m-%dT%H:%M:%S', 'now')
+        FROM streams
+        WHERE stream_id = ?1
+        RETURNING id
+        """,
+        [stream_id]
+      )
+
+    archive_id
+  end
+
+  defp copy_to_archive!(repo, archive_id, stream) do
+    %{num_rows: copied} =
+      SQL.query!(
+        repo,
+        """
+        INSERT INTO archived_stream_events (archive_id, event_id, stream_version, all_position)
+        SELECT ?1, s.event_id, s.stream_version, a.stream_version
+        FROM stream_events s
+        JOIN stream_events a
+          ON a.stream_id = ?3
+         AND a.original_stream_id = s.stream_id
+         AND a.original_stream_version = s.stream_version
+         AND a.event_id = s.event_id
+        WHERE s.stream_id = ?2
+        """,
+        [archive_id, stream.stream_id, @all_stream_id]
+      )
+
+    if copied != stream.stream_version do
+      raise """
+      cannot archive #{inspect(stream.stream_id)}: only #{copied} of its \
+      #{stream.stream_version} events have a matching $all row. Nothing was \
+      archived.
+      """
+    end
+  end
+
+  defp delete_stream(repo, stream_id) do
+    SQL.query!(repo, "DELETE FROM stream_events WHERE stream_id = ?2 AND original_stream_id = ?1", [
+      stream_id,
+      @all_stream_id
+    ])
+
+    SQL.query!(repo, "DELETE FROM stream_events WHERE stream_id = ?1", [stream_id])
+    SQL.query!(repo, "DELETE FROM streams WHERE stream_id = ?1", [stream_id])
+  end
+
+  defp append_system_event(repo, stream_id, data) do
+    event = Event.new(data)
+    :ok = insert_events(repo, [event])
+    {:ok, _} = insert_in_stream(repo, stream_id, [{event.id, nil}])
   end
 end
