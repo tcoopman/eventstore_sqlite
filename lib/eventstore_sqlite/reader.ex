@@ -3,6 +3,8 @@ defmodule EventstoreSqlite.Reader do
   import Ecto.Query, only: [from: 2, dynamic: 2]
 
   alias EventstoreSqlite.Event
+  alias EventstoreSqlite.RecordedEvent
+  alias EventstoreSqlite.Upcaster
 
   @doc """
   Returns a lazy stream of events in chunks, stopping after a total maximum limit.
@@ -42,7 +44,10 @@ defmodule EventstoreSqlite.Reader do
 
             next_state = {next_cursor, new_count}
 
-            parsed_chunk = Stream.map(raw_chunk, &EventstoreSqlite.RecordedEvent.parse/1)
+            upcasters = Upcaster.upcasters()
+
+            parsed_chunk =
+              Stream.map(raw_chunk, &(&1 |> RecordedEvent.parse() |> Upcaster.apply_all(upcasters)))
 
             {parsed_chunk, next_state}
           end

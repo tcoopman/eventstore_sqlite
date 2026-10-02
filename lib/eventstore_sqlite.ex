@@ -51,8 +51,10 @@ defmodule EventstoreSqlite do
 
   Event data and metadata are serialized using Erlang term encoding. Events
   must be Elixir structs; use `EventstoreSqlite.NewEvent` to provide metadata
-  or a caller-supplied UUID event ID. Keep event modules and their serialized
-  shape compatible with the data already stored in the database.
+  or a caller-supplied UUID event ID. A stored event keeps its struct's module
+  name and the fields it was written with; configure an
+  `EventstoreSqlite.Upcaster` to read events whose module has since moved or
+  whose shape has since changed.
 
   ## Public API
 

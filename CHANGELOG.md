@@ -80,6 +80,12 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 
 ### Added
 
+- Upcast events as they are read with `EventstoreSqlite.Upcaster`. Configure
+  `config :eventstore_sqlite, upcasters: [MyApp.EventUpcaster]` to turn stored
+  events into their current shape for every read and subscription, without
+  changing what is stored. `EventstoreSqlite.Upcaster.rename/2` reads events
+  whose struct module has moved, including structs nested in the event or its
+  metadata.
 - Preserve the original stream ID and version on recorded events, including
   events read from `"$all"`; migrate existing `$all` rows to populate this
   provenance.
