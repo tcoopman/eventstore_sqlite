@@ -9,6 +9,50 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 
 ### Breaking
 
+- **Run these checks before upgrading: the migrations refuse to run on a store
+  that fails them.** The migrations abort, leaving the store unchanged, but an
+  application that migrates on boot will then fail to start.
+
+  Every `"$all"` row must belong to exactly one application stream. Rows
+  without one are left behind when a stream's rows are deleted from
+  `stream_events` by hand (instead of with `archive_stream/2`), or by an old
+  direct append to `"$all"`. This must return `0`:
+
+  ```sql
+  SELECT count(*) FROM stream_events a
+  WHERE a.stream_id = '$all'
+    AND (SELECT count(*) FROM stream_events o
+         WHERE o.event_id = a.event_id AND o.stream_id <> '$all') <> 1;
+  ```
+
+  The name `"$archives"` is now reserved, so no stream may already use it.
+  This must return `0`:
+
+  ```sql
+  SELECT count(*) FROM streams WHERE stream_id = '$archives';
+  ```
+
+  Repair any rows the first query finds before upgrading; the error message of
+  the failing migration lists them.
+
+  The usual case is `"$all"` rows whose stream rows were deleted by hand. Those
+  events no longer belong to any stream, so their `"$all"` rows can be removed.
+  Back up the database first, then run this while the application is stopped:
+
+  ```sql
+  BEGIN IMMEDIATE;
+  DELETE FROM stream_events
+  WHERE stream_id = '$all'
+    AND NOT EXISTS (SELECT 1 FROM stream_events o
+                    WHERE o.event_id = stream_events.event_id AND o.stream_id <> '$all');
+  COMMIT;
+  ```
+
+  This removes only `"$all"` rows; the `events` rows stay. The removed events'
+  `"$all"` positions become gaps and are not reused. Afterwards the first query
+  must return `0`. If it doesn't, some events appear in more than one stream;
+  those rows have to be repaired by hand.
+
 - **Numeric-looking stream names are now returned as strings.** Before this
   change, `stream_events` stored stream IDs with SQLite INTEGER affinity, so an
   event appended to a stream such as `"123"`, `"-5"` or `"1.5"` was read back
