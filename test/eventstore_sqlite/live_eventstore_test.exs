@@ -134,4 +134,97 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       assert conn.resp_body =~ "LiveSocket"
     end
   end
+
+  describe "a stream's page" do
+    defp texts(count, prefix), do: Enum.map(1..count, &%Note{text: "#{prefix}#{&1}"})
+
+    test "links from the streams table", %{conn: conn} do
+      :ok = EventstoreSqlite.append_to_stream("orders:1", notes(1))
+      {:ok, view, _html} = live(conn, "/eventstore")
+
+      {:ok, _view, html} =
+        view |> element("#streams a", "orders:1") |> render_click() |> follow_redirect(conn)
+
+      assert html =~ ~s(id="stream-name")
+      assert html =~ "orders:1"
+    end
+
+    test "shows the latest events first, a page at a time", %{conn: conn} do
+      :ok = EventstoreSqlite.append_to_stream("big:1", texts(60, "e"))
+
+      {:ok, view, html} = live(conn, "/eventstore/stream?id=big%3A1")
+      assert html =~ "Events 35–59"
+      assert has_element?(view, "#event-59")
+      refute has_element?(view, "#event-34")
+
+      view |> element(".pager a", "Older") |> render_click()
+      assert_patch(view, "/eventstore/stream?id=big%3A1&before=35")
+      assert has_element?(view, "#event-34")
+      assert has_element?(view, "#event-10")
+      refute has_element?(view, "#event-35")
+
+      view |> element(".pager a", "Older") |> render_click()
+      assert_patch(view, "/eventstore/stream?id=big%3A1&before=10")
+      assert has_element?(view, "#event-0")
+
+      view |> element(".pager a", "Newer") |> render_click()
+      assert_patch(view, "/eventstore/stream?id=big%3A1&before=35")
+
+      view |> element(".pager a", "Latest") |> render_click()
+      assert_patch(view, "/eventstore/stream?id=big%3A1")
+    end
+
+    test "keeps up with appends on the latest page", %{conn: conn} do
+      :ok = EventstoreSqlite.append_to_stream("live:1", notes(1))
+      {:ok, view, _html} = live(conn, "/eventstore/stream?id=live%3A1")
+
+      :ok = EventstoreSqlite.append_to_stream("live:1", notes(1))
+      assert eventually(fn -> has_element?(view, "#event-1") end)
+    end
+
+    test "shows an event's metadata and data", %{conn: conn} do
+      event = %EventstoreSqlite.NewEvent{data: %Note{text: "hello"}, metadata: %{correlation_id: "c-1"}}
+      :ok = EventstoreSqlite.append_to_stream("orders:1", [event])
+      {:ok, view, _html} = live(conn, "/eventstore/stream?id=orders%3A1")
+
+      view |> element("#event-0 a", "Note") |> render_click()
+      assert_patch(view, "/eventstore/stream?id=orders%3A1&event=0")
+
+      assert view |> element("#event-detail") |> render() =~ "Elixir.EventstoreSqlite.Test.Note"
+      assert view |> element("#event-metadata") |> render() =~ "c-1"
+      assert view |> element("#event-data") |> render() =~ "hello"
+    end
+
+    test "doesn't render a large event's data, but downloads it", %{conn: conn} do
+      :ok = EventstoreSqlite.append_to_stream("orders:1", [%Note{text: String.duplicate("x", 60_000)}])
+      {:ok, view, _html} = live(conn, "/eventstore/stream?id=orders%3A1&event=0")
+
+      assert view |> element("#event-data") |> render() =~ "too big to show"
+      assert view |> element("#event-0") |> render() =~ "large"
+
+      view |> element("#event-detail button", "Download JSON") |> render_click()
+      assert_push_event(view, "live_eventstore:download", %{filename: "orders_1-0.json", content: content})
+      assert %{"data" => %{"text" => text}} = Jason.decode!(content)
+      assert byte_size(text) == 60_000
+    end
+
+    test "every row has a download button", %{conn: conn} do
+      :ok = EventstoreSqlite.append_to_stream("orders:1", notes(2))
+      {:ok, view, _html} = live(conn, "/eventstore/stream?id=orders%3A1")
+
+      view |> element("#event-1 button", "JSON") |> render_click()
+      assert_push_event(view, "live_eventstore:download", %{filename: "orders_1-1.json"})
+    end
+
+    test "$all shows where each event was appended", %{conn: conn} do
+      :ok = EventstoreSqlite.append_to_stream("orders:1", notes(1))
+      {:ok, view, _html} = live(conn, "/eventstore/stream?id=%24all")
+      assert view |> element("#event-0") |> render() =~ "orders:1 @ 0"
+    end
+
+    test "a stream that doesn't exist says so", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/eventstore/stream?id=nope")
+      assert has_element?(view, "#not-found")
+    end
+  end
 end

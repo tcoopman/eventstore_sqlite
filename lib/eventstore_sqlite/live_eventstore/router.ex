@@ -18,10 +18,10 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
         socket "/live", Phoenix.LiveView.Socket,
           websocket: [connect_info: [session: @session_options]]
 
-    The page shows stream names and, with sync enabled, node names and
-    replication errors, so put it behind authentication, as you would
-    `Phoenix.LiveDashboard`. It serves its own stylesheet and JavaScript (with
-    Fluxon's), under `<path>/assets`.
+    The pages show stream names, every event's data and metadata, and with
+    sync enabled node names and replication errors, so put them behind
+    authentication, as you would `Phoenix.LiveDashboard`. It serves its own
+    stylesheet and JavaScript (with Fluxon's), under `<path>/assets`.
 
     Options:
 
@@ -49,6 +49,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
 
           live_session session_name, session_opts do
             live("/", EventstoreSqlite.LiveEventstore.StreamsLive, :index, as: :live_eventstore)
+            live("/stream", EventstoreSqlite.LiveEventstore.StreamLive, :show, as: :live_eventstore_stream)
           end
         end
       end

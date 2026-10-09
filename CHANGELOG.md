@@ -47,6 +47,11 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
     assignments with each stream's owner, and recent `"$sync"` and
     `"$ownership"` events.
 
+  - each stream's events on their own page (`<path>/stream?id=…`), newest
+    first, 25 at a time, with each event's envelope, metadata and data as
+    JSON in a side sheet. Data or metadata over 50 KB of JSON isn't rendered;
+    every event can be downloaded as JSON, from its row or its sheet.
+
   It updates through `subscribe_to_changes/1`, with a refresh every 30 s for
   writes it isn't told about, and only uses the public API. It is built with
   Fluxon UI and serves its own stylesheet (compiled with Tailwind into

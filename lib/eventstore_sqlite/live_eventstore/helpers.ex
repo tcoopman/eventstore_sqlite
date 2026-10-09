@@ -35,6 +35,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
     def root_path(""), do: "/"
     def root_path(base_path), do: base_path
 
+    def stream_path(base_path, stream_id, query \\ []), do: path(base_path, "/stream", [{:id, stream_id} | query])
+
     def number(nil), do: "—"
 
     def number(integer) do
@@ -54,6 +56,10 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
 
     def plural(1, word), do: "1 #{word}"
     def plural(count, word), do: "#{number(count)} #{word}s"
+
+    def bytes(size) when size < 1_024, do: "#{size} B"
+    def bytes(size) when size < 1_048_576, do: "#{Float.round(size / 1_024, 1)} KB"
+    def bytes(size), do: "#{Float.round(size / 1_048_576, 1)} MB"
 
     def system_stream?(stream_id), do: stream_id in EventstoreSqlite.system_streams()
   end

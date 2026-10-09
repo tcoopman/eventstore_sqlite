@@ -16,9 +16,11 @@ A read-only LiveView page of the store, mounted like Phoenix LiveDashboard. It
 shows the streams with their versions and timestamps (searchable and paged by
 name) and, with sync enabled, this node's role, its peers (state, lag, last
 applied entry, errors), the change log, ownership assignments with each
-stream's owner, and recent sync history. It updates when the store changes,
-through `EventstoreSqlite.subscribe_to_changes/1`, and only uses the public
-API.
+stream's owner, and recent sync history. Click a stream to page through its
+events, newest first, and open one to see its envelope, metadata and data as
+JSON; large payloads aren't rendered, but every event can be downloaded as
+JSON. It updates when the store changes, through
+`EventstoreSqlite.subscribe_to_changes/1`, and only uses the public API.
 
 It is built with [Fluxon UI](https://fluxonui.com), so it needs both
 `phoenix_live_view` and `fluxon` in your application; this library depends on

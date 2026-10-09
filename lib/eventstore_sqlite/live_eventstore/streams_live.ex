@@ -228,7 +228,15 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
               <.table_body>
                 <.table_row :for={stream <- @page.entries}>
                   <:cell class="font-mono">
-                    <span class={if(system_stream?(stream.stream_id), do: "text-foreground-softer", else: "text-foreground")}>{stream.stream_id}</span>
+                    <.link
+                      navigate={stream_path(@base_path, stream.stream_id)}
+                      class={[
+                        "hover:underline",
+                        if(system_stream?(stream.stream_id), do: "text-foreground-softer", else: "text-foreground")
+                      ]}
+                    >
+                      {stream.stream_id}
+                    </.link>
                   </:cell>
                   <:cell class="text-right tabular-nums">{number(stream.version)}</:cell>
                   <:cell class="text-foreground-softer tabular-nums">{time(stream.created_at)}</:cell>
