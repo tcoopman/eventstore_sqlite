@@ -69,6 +69,11 @@ defmodule EventstoreSqlite do
       retaining its records in archive tables.
     * `list_streams/0` — list live stream names, including system streams that
       currently exist.
+    * `stream_info/1`, `list_stream_infos/1` — a stream's version, first and
+      last event times and owner, without reading its events; the list is
+      searchable and paged.
+    * `subscribe_to_changes/1` — be told, at most about once a second, that
+      the streams or the sync status changed.
 
   There is no public API to read or unarchive archived events. See
   `archive_stream/2` for why rolling back the library after an archive is not
@@ -76,6 +81,7 @@ defmodule EventstoreSqlite do
   """
   import Ecto.Query, only: [from: 2]
 
+  alias EventstoreSqlite.Changes
   alias EventstoreSqlite.Event
   alias EventstoreSqlite.Reader
   alias EventstoreSqlite.Store
@@ -86,6 +92,7 @@ defmodule EventstoreSqlite do
   @system_streams [@all_stream_id, @archives_stream_id, "$sync", "$ownership"]
   @default_count 10_000
   @default_chunk_size 1_000
+  @default_page_size 100
 
   @doc """
   Returns a lazy stream of recorded events, oldest first.
@@ -230,6 +237,7 @@ defmodule EventstoreSqlite do
          ) do
       {:ok, sync} ->
         :ok = EventstoreSqlite.Subscriptions.ping(stream_id)
+        Changes.notify(changed_by_write(sync))
         Sync.Write.notify(sync)
 
       {:error, reason} ->
@@ -303,8 +311,12 @@ defmodule EventstoreSqlite do
     end
 
     case EventstoreSqlite.Subscriptions.archive_stream(stream_id, archive) do
-      {:ok, sync} -> Sync.Write.notify(sync)
-      error -> error
+      {:ok, sync} ->
+        Changes.notify(changed_by_write(sync))
+        Sync.Write.notify(sync)
+
+      error ->
+        error
     end
   end
 
@@ -423,6 +435,40 @@ defmodule EventstoreSqlite do
     EventstoreSqlite.Subscriptions.subscribe_to_stream(subscriber_pid, stream, version, filter, batch_size)
   end
 
+  @doc """
+  Tells `subscriber_pid` when the store changes, without saying how. Meant for
+  views of the store, such as a dashboard, that reload what they show instead
+  of following events.
+
+  The subscriber receives `{:eventstore_sqlite, :changed, kinds}`, where
+  `kinds` is a sorted, non-empty list of:
+
+    * `:streams` — a stream was appended to or archived, here or by an import
+      from a peer, or ownership changed, so `stream_info/1` and
+      `list_stream_infos/1` may return something new;
+    * `:sync` — something `EventstoreSqlite.Sync.status/0` returns may have
+      changed: the sync state, the change log, a peer's cursor or
+      acknowledgement, or a replicator's connection or last error.
+
+  Messages are coalesced per subscriber: the first change is sent at once,
+  and changes during the next second are sent together when it ends. A busy
+  store therefore sends about one message a second. Change the interval with
+  `config :eventstore_sqlite, changes_interval: ms`.
+
+  Notifications are best-effort hints, like `subscribe_to_stream/5`'s pings:
+
+    * they only cover changes made by this node, including what it imports
+      from its peers. Another BEAM writing to the same database file sends
+      nothing, so poll now and then as well;
+    * the subscription ends when the subscriber exits, or when the
+      `EventstoreSqlite.Changes` process restarts. Monitor that process and
+      subscribe again when it goes down, as described for
+      `subscribe_to_stream/5`.
+
+  Subscribing a process twice has no extra effect. Returns `:ok`.
+  """
+  def subscribe_to_changes(subscriber_pid) when is_pid(subscriber_pid), do: Changes.subscribe(subscriber_pid)
+
   @doc false
   def system_streams, do: @system_streams
 
@@ -443,6 +489,101 @@ defmodule EventstoreSqlite do
 
     EventstoreSqlite.RepoRead.all(query)
   end
+
+  @doc """
+  What the store knows about the live stream `stream_id`, without reading its
+  events: its version, when its first and last events were appended, and with
+  sync enabled its owner. See `EventstoreSqlite.StreamInfo`.
+
+  Returns `{:ok, %EventstoreSqlite.StreamInfo{}}`, or `{:error, :not_found}`
+  when no live stream has that name. System streams have info too.
+  """
+  def stream_info(stream_id) when is_binary(stream_id) do
+    case stream_infos([{"s.stream_id = ?", [stream_id]}], 1) do
+      [info] -> {:ok, info}
+      [] -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  One page of live streams, ordered by name, each as an
+  `EventstoreSqlite.StreamInfo`.
+
+  Options:
+
+    * `:search` — only streams whose name contains this text, ignoring the
+      case of ASCII letters. `%`, `_` and `\\` match themselves. Every stream
+      name is checked, so on a large store a search costs a scan of the names.
+    * `:after` — the page starts after this stream name. Pass the previous
+      page's `next`.
+    * `:limit` — the most streams on a page (default #{@default_page_size}); it
+      must be a positive integer.
+    * `:system` — also list the system streams that exist (default `false`).
+
+  Returns `%{entries: [stream_info], next: stream_id | nil}`, where `next` is
+  `nil` on the last page. Pages are cut by name, not by position, so a stream
+  created or archived while you page is listed or skipped according to where
+  its name sorts, and no other stream is listed twice or skipped.
+  """
+  def list_stream_infos(opts \\ []) do
+    limit = positive_integer_option!(opts, :limit, @default_page_size)
+
+    conditions =
+      Enum.reject(
+        [
+          if(!Keyword.get(opts, :system, false), do: not_system_condition()),
+          search_condition(Keyword.get(opts, :search)),
+          if(after_name = Keyword.get(opts, :after), do: {"s.stream_id > ?", [after_name]})
+        ],
+        &is_nil/1
+      )
+
+    infos = stream_infos(conditions, limit + 1)
+
+    if length(infos) > limit do
+      entries = Enum.take(infos, limit)
+      %{entries: entries, next: List.last(entries).stream_id}
+    else
+      %{entries: infos, next: nil}
+    end
+  end
+
+  defp stream_infos(conditions, limit) do
+    rows = Store.stream_rows(EventstoreSqlite.RepoRead, conditions, limit)
+    sync = Sync.State.load(EventstoreSqlite.RepoRead)
+
+    Enum.map(rows, fn [stream_id, version, created_at, last_event_at] ->
+      %EventstoreSqlite.StreamInfo{
+        stream_id: stream_id,
+        version: version,
+        created_at: timestamp(created_at),
+        last_event_at: timestamp(last_event_at),
+        owner: if(sync.enabled and stream_id not in @system_streams, do: Sync.State.owner(sync, stream_id))
+      }
+    end)
+  end
+
+  defp not_system_condition do
+    {"s.stream_id NOT IN (#{Enum.map_join(@system_streams, ", ", fn _ -> "?" end)})", @system_streams}
+  end
+
+  defp search_condition(nil), do: nil
+  defp search_condition(""), do: nil
+
+  defp search_condition(text) when is_binary(text) do
+    escaped = String.replace(text, ["\\", "%", "_"], &("\\" <> &1))
+    {"s.stream_id LIKE ? ESCAPE '\\'", ["%" <> escaped <> "%"]}
+  end
+
+  defp timestamp(nil), do: nil
+
+  defp timestamp(text) do
+    {:ok, datetime, 0} = DateTime.from_iso8601(text)
+    datetime
+  end
+
+  defp changed_by_write(:disabled), do: [:streams]
+  defp changed_by_write(_sync), do: [:streams, :sync]
 
   defp with_start_versions(stream_id) when is_binary(stream_id), do: [{stream_id, 0}]
 

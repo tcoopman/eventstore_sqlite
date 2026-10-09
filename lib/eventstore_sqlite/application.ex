@@ -8,6 +8,7 @@ defmodule EventstoreSqlite.Application do
       EventstoreSqlite.RepoWrite,
       EventstoreSqlite.RepoRead,
       EventstoreSqlite.Subscriptions,
+      EventstoreSqlite.Changes,
       %{id: :pg, start: {:pg, :start_link, [EventstoreSqlite.Sync.Write.pg_scope()]}},
       EventstoreSqlite.Sync.Supervisor
     ]

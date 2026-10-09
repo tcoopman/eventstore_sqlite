@@ -237,10 +237,22 @@ defmodule EventstoreSqlite.Sync do
   end
 
   defp origin_status(repo, peer) do
-    case SQL.query!(repo, "SELECT seq, origin_head, origin_diverged FROM sync_cursors WHERE origin = ?1", [peer]) do
-      %{rows: [[seq, head, diverged]]} -> %{cursor: seq, head: head, diverged: diverged == 1}
-      %{rows: []} -> %{cursor: 0, head: nil, diverged: false}
+    query = "SELECT seq, origin_head, origin_diverged, applied_at FROM sync_cursors WHERE origin = ?1"
+
+    case SQL.query!(repo, query, [peer]) do
+      %{rows: [[seq, head, diverged, applied_at]]} ->
+        %{cursor: seq, head: head, diverged: diverged == 1, applied_at: datetime(applied_at)}
+
+      %{rows: []} ->
+        %{cursor: 0, head: nil, diverged: false, applied_at: nil}
     end
+  end
+
+  defp datetime(nil), do: nil
+
+  defp datetime(text) do
+    {:ok, datetime, 0} = DateTime.from_iso8601(text)
+    datetime
   end
 
   defp peer_ack(repo, peer) do
@@ -251,19 +263,38 @@ defmodule EventstoreSqlite.Sync do
   end
 
   @doc """
-  The sync state of this node and, per peer:
+  The sync state of this node:
 
-    * `state` — `:connected`, `:disconnected`, `:halted`, `:retired` (revoked,
-      not heard from since), `:diverged` (revoked and reported itself
-      diverged), `:drained` (diverged and fully pulled), or `:ambiguous`
-      (several nodes claim the peer's id);
-    * `cursor` — the last of its entries this node applied, and `peer_head`, the
-      last head it reported; `lag` is their difference;
-    * `acked` — the last of this node's entries the peer confirmed, and
-      `pinned_seq`; the log can't be pruned past the smaller one;
-    * `owns` — the ownership generations it holds;
-    * `quarantined` — how many of its entries were quarantined;
-    * `halted`, `last_error`, `last_success`.
+    * `node_id`, `home`, `enabled`, `home?` and `diverged` (`nil`, or how this
+      node learned it was revoked);
+    * `head` — the last seq this node handed out in its change log;
+    * `log` — the entries it still retains for its peers: `%{oldest, entries}`,
+      with `oldest` `nil` when there are none. Entries are pruned once every
+      peer has acknowledged them (`acked`), and never past a peer's
+      `pinned_seq`;
+    * `assignments` — the active ownership assignments, by generation;
+    * `peers` — per peer:
+      * `state` — `:connected`, `:disconnected`, `:halted`, `:retired`
+        (revoked, not heard from since), `:diverged` (revoked and reported
+        itself diverged), `:drained` (diverged and fully pulled),
+        `:ambiguous` (several nodes claim the peer's id), `:busy` (its
+        replicator didn't answer within a second) or `:not_running`;
+      * `cursor` — the last of its entries this node applied, and
+        `peer_head`, the last head it reported; `lag` is their difference;
+      * `last_applied_at` — when this node last applied one of its entries,
+        or `nil`. With `lag` above 0, an old `last_applied_at` means
+        replication is stuck rather than busy;
+      * `acked` — the last of this node's entries the peer confirmed, and
+        `pinned_seq`; the log can't be pruned past the smaller one;
+      * `owns` — the ownership generations it holds;
+      * `quarantined` — how many of its entries were quarantined;
+      * `halted` — why replication from it halted, or `nil`;
+      * `last_error`, `last_success` — the replicator's last failure and last
+        successful pull. They are kept in memory, so they are `nil` after a
+        restart until the next attempt.
+
+  Every timestamp is a `DateTime`. Each peer costs a call to its replicator,
+  which waits at most a second.
   """
   def status do
     state = State.load(RepoRead)
@@ -275,6 +306,7 @@ defmodule EventstoreSqlite.Sync do
       home?: State.home?(state),
       diverged: state.diverged,
       head: Log.head(RepoRead),
+      log: Log.retained(RepoRead),
       assignments: state.owners,
       peers: Map.new(state.peers, fn {peer, info} -> {peer, peer_status(state, peer, info)} end)
     }
@@ -301,6 +333,7 @@ defmodule EventstoreSqlite.Sync do
       cursor: origin.cursor,
       peer_head: origin.head,
       lag: if(origin.head, do: max(origin.head - origin.cursor, 0)),
+      last_applied_at: origin.applied_at,
       acked: peer_ack(RepoRead, peer),
       pinned_seq: info.pinned_seq,
       owns: State.generations_of(state, peer),
@@ -454,6 +487,7 @@ defmodule EventstoreSqlite.Sync do
     EventstoreSqlite.Subscriptions.ping(State.sync_stream())
     EventstoreSqlite.Subscriptions.ping(State.ownership_stream())
     if state.enabled, do: Write.poke(state.node_id)
+    EventstoreSqlite.Changes.notify([:streams, :sync])
     Server.refresh()
   end
 end

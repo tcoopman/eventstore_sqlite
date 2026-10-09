@@ -51,15 +51,15 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
       .toolbar input[type=search] { flex: 1 1 280px; padding: 7px 10px; border: 1px solid var(--line);
                border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
-      select { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
-               color: var(--text); font: inherit; }
-      .count { color: var(--muted); }
       table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line);
               border-radius: 8px; overflow: hidden; }
       th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); }
       th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
-      th a { color: inherit; text-decoration: none; }
-      th a.active { color: var(--text); }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 24px 0 8px; }
+      section + h2, h2:first-child { margin-top: 0; }
+      td.problem { color: var(--bad); font-size: 12px; word-break: break-word; }
+      td.fields { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                  word-break: break-word; }
       td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       td.name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
       td.time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }

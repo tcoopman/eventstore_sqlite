@@ -18,8 +18,9 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         socket "/live", Phoenix.LiveView.Socket,
           websocket: [connect_info: [session: @session_options]]
 
-    The page shows stream names and counts, so put it behind authentication,
-    as you would `Phoenix.LiveDashboard`.
+    The page shows stream names and, with sync enabled, node names and
+    replication errors, so put it behind authentication, as you would
+    `Phoenix.LiveDashboard`.
 
     Options:
 

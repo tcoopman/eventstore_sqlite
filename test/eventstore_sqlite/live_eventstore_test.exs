@@ -5,7 +5,6 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
-  alias EventstoreSqlite.LiveEventstore.Overview
   alias EventstoreSqlite.Test.Note
 
   @endpoint EventstoreSqlite.TestWeb.Endpoint
@@ -21,51 +20,17 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
 
   defp notes(count), do: Enum.map(1..count, &%Note{text: "n#{&1}"})
 
-  defp names(%{entries: entries}), do: Enum.map(entries, & &1.stream_id)
+  defp eventually(fun, tries \\ 50) do
+    cond do
+      fun.() ->
+        true
 
-  describe "Overview" do
-    setup do
-      :ok = EventstoreSqlite.append_to_stream("orders:1", notes(3))
-      :ok = EventstoreSqlite.append_to_stream("orders:2", notes(1))
-      :ok = EventstoreSqlite.append_to_stream("venue:100%_off", notes(2))
-      :ok = EventstoreSqlite.append_to_stream("gone", notes(1))
-      :ok = EventstoreSqlite.archive_stream("gone")
-    end
+      tries == 0 ->
+        false
 
-    test "summary counts application streams, their events, and archives" do
-      assert %{streams: 3, events: 6, archived_streams: 1, all_position: 7, sync: %{enabled: false}} =
-               Overview.summary()
-    end
-
-    test "lists application streams by name; system streams only on request" do
-      assert names(Overview.streams()) == ["orders:1", "orders:2", "venue:100%_off"]
-      assert names(Overview.streams(system: true)) == ["$all", "$archives", "orders:1", "orders:2", "venue:100%_off"]
-    end
-
-    test "each entry has its event count and timestamps" do
-      [entry | _] = Overview.streams().entries
-      assert %{stream_id: "orders:1", events: 3, system?: false, owner: nil} = entry
-      assert entry.created_at =~ ~r/^\d{4}-\d\d-\d\dT/
-      assert entry.last_event_at =~ ~r/^\d{4}-\d\d-\d\dT/
-    end
-
-    test "filters by name, treating % and _ literally" do
-      assert names(Overview.streams(search: "orders")) == ["orders:1", "orders:2"]
-      assert names(Overview.streams(search: "100%_")) == ["venue:100%_off"]
-      assert names(Overview.streams(search: "0_o")) == []
-    end
-
-    test "sorts and pages" do
-      assert names(Overview.streams(sort: :events, order: :desc)) == ["orders:1", "venue:100%_off", "orders:2"]
-
-      assert %{entries: [%{stream_id: "orders:2"}], total: 3, page: 2, pages: 3} =
-               Overview.streams(per_page: 1, page: 2)
-    end
-
-    test "shows the owner of each stream once sync is enabled" do
-      :ok = EventstoreSqlite.Sync.enable("test-node")
-      assert Enum.map(Overview.streams().entries, & &1.owner) == List.duplicate({"test-node", 0}, 3)
-      assert %{enabled: true, node_id: "test-node", home?: true} = Overview.summary().sync
+      true ->
+        Process.sleep(20)
+        eventually(fun, tries - 1)
     end
   end
 
@@ -75,34 +40,44 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       :ok = EventstoreSqlite.append_to_stream("venue:1", notes(1))
     end
 
-    test "renders the overview, statically and connected", %{conn: conn} do
+    test "renders the streams, statically and connected", %{conn: conn} do
       html = conn |> get("/eventstore") |> html_response(200)
       assert html =~ "orders:1"
+      assert html =~ "single node"
       assert html =~ ~s(src="/eventstore/assets/live_eventstore.js")
       assert html =~ ~s(data-live-socket-path="/live")
 
       {:ok, view, _html} = live(conn, "/eventstore")
-      assert view |> element("#summary-streams") |> render() =~ ">2<"
-      assert view |> element("#streams") |> render() =~ "venue:1"
+      table = view |> element("#streams") |> render()
+      assert table =~ "venue:1"
+      refute has_element?(view, "#sync")
     end
 
     test "filters as you type and keeps the filter in the URL", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/eventstore")
 
-      view |> form("#filter", search: "venue") |> render_change()
-      assert_patch(view, "/eventstore?search=venue")
+      view |> form("#filter", search: "NUE") |> render_change()
+      assert_patch(view, "/eventstore?search=NUE")
       table = view |> element("#streams") |> render()
       assert table =~ "venue:1"
       refute table =~ "orders:1"
     end
 
-    test "sorts by a column, toggling the order", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/eventstore?sort=events&order=desc")
-      rows = view |> element("#streams tbody") |> render()
-      assert :binary.match(rows, "orders:1") < :binary.match(rows, "venue:1")
+    test "pages by name", %{conn: conn} do
+      for i <- 1..60, do: :ok = EventstoreSqlite.append_to_stream("page:#{String.pad_leading("#{i}", 2, "0")}", notes(1))
 
-      view |> element("th a", "Events") |> render_click()
-      assert_patch(view, "/eventstore?sort=events")
+      {:ok, view, _html} = live(conn, "/eventstore?search=page")
+      assert view |> element("#streams tbody") |> render() =~ "page:50"
+      refute view |> element("#streams tbody") |> render() =~ "page:51"
+
+      view |> element(".pager a", "Next") |> render_click()
+      assert_patch(view, "/eventstore?search=page&after=page%3A50")
+      rows = view |> element("#streams tbody") |> render()
+      assert rows =~ "page:51"
+      refute rows =~ "page:50"
+
+      view |> element(".pager a", "First page") |> render_click()
+      assert_patch(view, "/eventstore?search=page")
     end
 
     test "shows system streams on request", %{conn: conn} do
@@ -110,11 +85,30 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       assert view |> element("#streams") |> render() =~ "$all"
     end
 
-    test "picks up new streams on refresh", %{conn: conn} do
+    test "updates when the store changes, without polling", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/eventstore")
       :ok = EventstoreSqlite.append_to_stream("later", notes(1))
-      send(view.pid, :refresh)
-      assert view |> element("#streams") |> render() =~ "later"
+      assert eventually(fn -> view |> element("#streams") |> render() =~ "later" end)
+    end
+
+    test "with sync enabled shows the node, its peers, owners and history", %{conn: conn} do
+      :ok = EventstoreSqlite.Sync.enable("test-node")
+
+      EventstoreSqlite.SyncCase.record!(%EventstoreSqlite.SystemEvents.PeerAdded{
+        node_id: "secondary-node",
+        pinned_seq: 0
+      })
+
+      {:ok, _} = EventstoreSqlite.Ownership.assign("venue:*", "secondary-node")
+
+      {:ok, view, html} = live(conn, "/eventstore")
+      assert html =~ "test-node"
+      assert view |> element("#peers") |> render() =~ "secondary-node"
+      assert view |> element("#assignments") |> render() =~ "venue:*"
+      assert view |> element("#streams") |> render() =~ "secondary-node · gen 1"
+      history = view |> element("#history") |> render()
+      assert history =~ "SyncEnabled"
+      assert history =~ "OwnershipAssigned"
     end
 
     test "works mounted in a nested scope", %{conn: conn} do

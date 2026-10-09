@@ -31,6 +31,7 @@ defmodule DemoWeb.Endpoint do
 
   socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
 
+  plug(Plug.Parsers, parsers: [:urlencoded], pass: ["*/*"])
   plug(Plug.Session, @session_options)
   plug(DemoWeb.Router)
 end

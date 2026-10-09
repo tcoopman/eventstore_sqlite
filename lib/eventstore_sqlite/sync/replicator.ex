@@ -55,13 +55,19 @@ defmodule EventstoreSqlite.Sync.Replicator do
   end
 
   @impl true
-  def handle_info(:pull, state), do: {:noreply, pull(%{state | timer: nil})}
+  def handle_info(:pull, state) do
+    pulled = pull(%{state | timer: nil})
+    if seen_status(pulled) != seen_status(state), do: EventstoreSqlite.Changes.notify(:sync)
+    {:noreply, pulled}
+  end
 
   def handle_info(:sync_poke, state), do: {:noreply, pull_soon(state)}
 
   def handle_info({_ref, :join, _group, _pids}, state), do: {:noreply, pull_soon(state)}
 
   def handle_info({_ref, :leave, _group, _pids}, state), do: {:noreply, state}
+
+  defp seen_status(state), do: Map.take(state, [:connection, :last_error])
 
   defp pull_soon(%{timer: nil} = state), do: schedule(state, 0)
 

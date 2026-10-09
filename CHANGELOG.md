@@ -7,19 +7,47 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 
 ## [2026-10-10]
 
+### Breaking
+
+- **Run the new migration, which adds `applied_at` to `sync_cursors`, before
+  starting the new version.** Replication writes it whenever it applies a
+  peer's entries, and `EventstoreSqlite.Sync.status/0` reads it: without the
+  migration, both fail on a store with sync enabled. Stores without sync are
+  unaffected. Rolling the migration back is safe.
+
 ### Added
 
+- `EventstoreSqlite.stream_info/1` and `EventstoreSqlite.list_stream_infos/1`
+  return `%EventstoreSqlite.StreamInfo{}`: a stream's version, the times of
+  its first and last event, and with sync enabled its owner, without reading
+  its events. The list is ordered by name, searchable anywhere in the name
+  (`:search`, ignoring ASCII case), and paged by name (`:after`, `:limit`),
+  with system streams on request (`:system`).
+- `EventstoreSqlite.subscribe_to_changes/1`: the subscriber receives
+  `{:eventstore_sqlite, :changed, kinds}`, with `kinds` from `[:streams,
+  :sync]`, when streams are appended to or archived (here or by an import),
+  ownership or sync state changes, or a peer's replication status changes.
+  Coalesced to about one message a second per subscriber
+  (`config :eventstore_sqlite, changes_interval: ms`).
+- `EventstoreSqlite.Sync.status/0` also returns `log: %{oldest, entries}`, the
+  change log entries retained for peers, and per peer `last_applied_at`, when
+  this node last applied one of its entries. Its documentation now lists
+  every field.
 - **live_eventstore**, a read-only LiveView dashboard to mount in a Phoenix
   router, like LiveDashboard: `import EventstoreSqlite.LiveEventstore.Router`,
   then `live_eventstore "/eventstore"` inside a scope that pipes through your
-  browser pipeline. This first version is an overview of the streams:
-  - totals for streams, events, the `"$all"` position and archived streams;
-  - every stream with its event count, creation time and last event time,
-    searchable by name, sortable and paged, with system streams on request;
-  - with sync enabled, this node's role and each stream's owner;
-  - auto-refresh (off, 1 s, 5 s or 15 s).
+  browser pipeline. It shows:
+  - every stream with its version, creation time and last event time,
+    searchable by name and paged, with system streams on request;
+  - with sync enabled, this node's role, its peers (state, lag, last applied
+    entry, last success, acknowledged entry, quarantined entries, owned
+    generations, halts and errors), the change log, the ownership
+    assignments with each stream's owner, and recent `"$sync"` and
+    `"$ownership"` events.
 
-  It serves its own JavaScript, built from the application's `phoenix` and
+  It updates through `subscribe_to_changes/1`, with a refresh every 30 s for
+  writes it isn't told about, and only uses the public API. It serves its own
+  JavaScript, built from the application's `phoenix` and
   `phoenix_live_view` packages, so it needs no asset build. Options:
   `:on_mount` (for authentication), `:live_socket_path`,
   `:live_session_name`. Put it behind authentication.

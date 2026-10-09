@@ -1,6 +1,9 @@
 # Issue — live_eventstore reads the database behind the public API
 
-- **Status:** Proposal, 2026-10-09. Nothing built.
+- **Status:** Done 2026-10-09: `stream_info/1`, `list_stream_infos/1`,
+  `subscribe_to_changes/1`, and the `Sync.status/0` additions. The dashboard
+  uses only the public API; `LiveEventstore.Overview` is gone. Quarantine
+  paging is left open (see "Not done").
 - **Found via:** a review of the live_eventstore dashboard (a9ad1b9): about one
   query per second per open tab, and SQL in `LiveEventstore.Overview` that no
   application can use.
@@ -32,13 +35,13 @@ API. They are dropped. Sync is where an operator needs insight.
 2. **This node:** node id, home or peer, enabled, diverged.
 3. **Per peer:** connection, lag, last success and last error, halted reason,
    quarantined entries, generations owned.
-4. **Ownership:** active assignments, and handovers in progress.
+4. **Ownership:** active assignments.
 5. **Change log:** what this node retains that a peer hasn't acknowledged yet,
    and why it can't be pruned.
 6. **History:** recent sync and ownership events: enabled, peers added and
    removed, halts and resumes, assignments, releases, revokes.
 
-## What the public API covers today
+## What the public API covered
 
 | Need | Public API | Verdict |
 |---|---|---|
@@ -46,169 +49,105 @@ API. They are dropped. Sync is where an operator needs insight.
 | Stream metadata | none | Missing. `read_stream_backward(id, count: 1)` gives the last event, not the created time, and decodes event data. |
 | Node and peers | `Sync.status/0` | Mostly covered (see 2 below). |
 | Owner of a stream | `Ownership.owner/1` | Covered for one stream; each call loads the sync state. |
-| Active assignments | `Ownership.list/0` | Covered. Handovers in progress (released, not yet pulled) aren't shown. |
+| Active assignments | `Ownership.list/0` | Covered. |
 | Quarantine | `Sync.quarantine/0` | Covered, but returns every entry with its payload. |
 | History | `read_stream_backward("$sync")`, `read_stream_backward("$ownership")` | Works today. The `EventstoreSqlite.SystemEvents` structs are public, but reading these streams isn't documented as supported. |
 | Knowing when to refresh | `subscribe_to_stream("$all")` | Too heavy: delivers every event with its data. |
 
-## Proposed API
+## Decisions
 
-### 1. Stream metadata
+- **Search anywhere in the name, not by prefix.** Stream names can be
+  anything; `category:id` is only a convention, so the API doesn't assume it.
+  A search scans the stream names, which is documented.
+- **Ordered by name only, paged by name.** No sort by version or time, and no
+  total: those need extra indexes or a scan, and the dashboard doesn't need
+  them. `:after` takes the last name of the previous page, so a stream created
+  while paging doesn't shift the pages.
+- **`StreamInfo` is a struct**, like `RecordedEvent`.
+- **`StreamInfo` carries the owner** when sync is enabled. One sync state read
+  per call, so a page of 50 costs no more than one stream.
+- **The change message says what changed** (`:streams`, `:sync`), so a view
+  can skip `Sync.status/0`, and its call to every replicator, when only
+  streams changed.
+- **No store totals** (stream count, event total, `$all` position, archived
+  count). They were nice, not useful.
+
+## What was built
+
+### Stream metadata
 
 ```elixir
 EventstoreSqlite.stream_info("orders:1001")
-#=> {:ok, %EventstoreSqlite.StreamInfo{
-#=>   stream_id: "orders:1001",
-#=>   version: 12,
-#=>   created_at: ~U[...],
-#=>   last_event_at: ~U[...]
-#=> }}
-#=> {:error, :not_found}
+#=> {:ok, %EventstoreSqlite.StreamInfo{stream_id: "orders:1001", version: 12,
+#=>   created_at: ~U[...], last_event_at: ~U[...], owner: {"main-node", 0}}}
+
+EventstoreSqlite.list_stream_infos(search: "1001", limit: 50, after: "orders:0999")
+#=> %{entries: [%StreamInfo{}, ...], next: "orders:1050" | nil}
 ```
 
-`version` means the same as in `{:version, n}` for `append_to_stream/3`: the
-next version, which is also the event count. `created_at` is when the stream's
-first event was appended; after an archive and a new first append, it is the
-new incarnation's. It works for system streams too.
+`version` means what `{:version, n}` means for `append_to_stream/3`.
+`created_at` and `last_event_at` are the first and last events' own
+timestamps, so they are the same on every node; the `streams` row's own
+`inserted_at` is local to the node and isn't used.
 
-A paged listing returning the same structs:
-
-```elixir
-EventstoreSqlite.list_stream_infos(prefix: "orders:", limit: 50, after: "orders:1050")
-#=> %{entries: [%StreamInfo{}, ...], next: "orders:1100" | nil}
-```
-
-Options:
-
-- `:prefix` — only names starting with this text. A prefix uses the primary
-  key index, and matches how stream names are usually built (a category, then
-  an id) and how ownership selectors work (`"venue:*"`).
-- `:limit` — default 100.
-- `:after` — a stream name; the page starts after it. Keyset paging by name
-  stays cheap and stable while streams are created; offsets do neither.
-- `:system` — include system streams (default `false`).
-
-`list_streams/0` stays as it is.
-
-The dashboard loses three things it has today, all deliberately:
-
-- **Substring search.** It becomes prefix search. Substring search is a full
-  scan, which the dashboard can afford and an application API shouldn't
-  promise.
-- **Sorting by events or created.** That needs an index per sort column, or a
-  scan.
-- **"Page x of y" and the total.** Keyset paging has a next page and no total.
-
-See open question 1.
-
-### 2. Sync status: what's missing from `Sync.status/0`
-
-`Sync.status/0` already returns the node, peers, connection, lag, acks, halts,
-quarantine counts, owned generations, last error and last success. What it
-lacks:
-
-- **A pending snapshot.** `state.snapshot` (created, not yet claimed by the new
-  peer) isn't returned. Add `snapshot: %{peer, snapshot_id, head_seq,
-  created_at} | nil`.
-- **The change log.** Add `log: %{head, oldest, entries}`. `oldest` is the
-  oldest seq still retained. Together with each peer's `acked` and
-  `pinned_seq`, which are already returned, this answers "why isn't the log
-  shrinking": a peer hasn't acknowledged, or a snapshot pins it.
-- **Lag in time, not just entries.** `lag` counts entries, and 3 entries
-  behind can mean 3 milliseconds or 3 hours. Add `last_applied_at`: when this
-  node applied the last entry from that peer. It needs a column in
-  `sync_cursors`, so it survives a restart, unlike `last_success`, which is
-  replicator memory.
-- **Timestamp types.** `last_success` and `last_error` come from the
-  replicator's memory and are lost on restart. Document that, and return
-  `DateTime`s everywhere.
-
-`Sync.status/0` makes one GenServer call per peer (1 s timeout). That is fine
-for a refresh triggered by a change, but it means a hung replicator delays the
-dashboard by a second per peer. The result already says `:busy`, so this only
-needs documenting.
-
-### 3. Ownership
-
-- **`Ownership.owners(stream_ids)`** returns `%{stream_id => {node_id,
-  generation}}` with one state load, for a page of streams. The dashboard can't
-  match `Ownership.list/0` selectors itself: the matching rules live in
-  `Sync.Selector`, which is internal, and copying them would let the dashboard
-  disagree with the write path.
-- **Handovers in progress.** `Ownership.list/0` shows active assignments only.
-  A generation that has been released but not yet pulled by the home node is
-  invisible, which is exactly the moment an operator watches. Add `state:
-  :active | :released` to each entry, with the `release_seq` for released
-  ones. Revoked generations stay out of the list; they show up in history.
-
-### 4. Quarantine
-
-`Sync.quarantine/0` decodes and returns every entry with its payload. Add
-`Sync.quarantine(limit: 20)`, newest first, or a variant without `entry`, so a
-dashboard can show the latest few without loading them all. The count per peer
-is already in `Sync.status/0`.
-
-### 5. History
-
-Document `"$sync"` and `"$ownership"` as readable with `read_stream_backward/2`,
-returning `EventstoreSqlite.SystemEvents` structs. This makes those structs
-contract: renaming a field needs an upcaster, like any application event. That
-is already true in practice, because they're stored as events.
-
-### 6. Change notification
+### Change notification
 
 ```elixir
 :ok = EventstoreSqlite.subscribe_to_changes(self())
-# receives {:eventstore_sqlite, :changed} at most once per interval
+# {:eventstore_sqlite, :changed, [:streams]}
+# {:eventstore_sqlite, :changed, [:streams, :sync]}
 ```
 
-The message carries nothing and is coalesced per subscriber (default: at most
-one per second). It is sent after:
+`EventstoreSqlite.Changes` holds the subscribers. The first change goes out at
+once; changes during the next interval (1 s) are sent together when it ends.
+It is notified after:
 
-- an append or archive commits, locally or applied from a peer;
-- a sync state change, such as an assignment, release, halt or divergence;
-- a replicator connecting or disconnecting.
+- an append or archive commits (`:streams`, plus `:sync` when sync is
+  enabled, because the change log grew);
+- an import from a peer commits (`:streams`, `:sync`), or only the peer's
+  reported head changed (`:sync`);
+- a sync state change (`:streams`, `:sync`: ownership changes owners);
+- a replicator's connection or last error changes (`:sync`);
+- a peer's acknowledgement advances, which can prune the log (`:sync`).
 
-Like subscriptions, it is local to this node and best-effort: a write from
-another BEAM on the same SQLite file sends nothing. The dashboard keeps a slow
-fallback poll (30–60 s) for that.
+A write from another BEAM on the same file isn't seen, so the dashboard also
+reloads every 30 s.
 
-Telemetry already reports halts, divergence, quarantine, imports and lag, but a
-telemetry handler runs in the emitting process and is global, so it doesn't fit
-a LiveView. This message is the process-level counterpart.
+### `Sync.status/0`
 
-## Not proposed
+- `log: %{oldest, entries}` — the entries retained for peers. Pruning only
+  removes a prefix, so `entries` is `head - oldest + 1` and costs no count.
+- per peer `last_applied_at` — a new `applied_at` column in `sync_cursors`
+  (migration `20261010120000`), set when the cursor moves forward. With `lag`
+  above 0, an old value means replication is stuck rather than busy.
+- The documentation lists every field, including `:busy` and `:not_running`,
+  and that `last_success` and `last_error` are lost on restart.
 
-- **Store totals** (stream count, event total, archived count, `$all`
-  position). The dashboard drops them. If they come back, they should be a
-  separate `stats/0` designed for its cost: the event total sums every stream's
-  version.
-- **Reading archived streams.** Still no public API, as documented in
-  `EventstoreSqlite`.
-- **Calling `Sync.verify/2` from the dashboard.** It's public, but it compares
-  whole histories over distribution. A dashboard button would make an
-  expensive operation one click away. Leave it in iex.
+### History
 
-## Open questions
+`"$sync"` and `"$ownership"` are read with `read_stream_backward/2`, as
+before; the dashboard shows the latest 15 of both.
 
-1. Is losing substring search, the sort by events or created, and the total
-   acceptable? The alternative is a `:search` option documented as a full scan,
-   and indexes on `streams(stream_version)` and `streams(inserted_at)` for
-   sorting. Sorting by last event, which is the most useful ("what's busy
-   now"), needs a `last_event_at` column on `streams`, maintained on append.
-2. `StreamInfo` struct or a plain map? `RecordedEvent` is a struct, so a struct
-   matches.
-3. Should `subscribe_to_changes/1` say what changed (`:streams`, `:sync`)? It
-   would let the dashboard skip `Sync.status/0` (and its GenServer calls) when
-   only streams changed. Cheap to add now, awkward to add later.
-4. Should owners be part of `StreamInfo` when sync is enabled? It saves the
-   dashboard a call, but makes stream metadata depend on sync.
+## Corrections to the first version of this proposal
 
-## Order of work
+- **"A pending snapshot isn't in `status/0`."** `state.snapshot` only exists in
+  the snapshot copy, before the new node claims it. On the home node a peer
+  that hasn't claimed its snapshot yet is a peer with `peer_head: nil`, which
+  `status/0` already shows.
+- **"Handovers in progress aren't in `Ownership.list/0`."** On the home node a
+  generation stays active until it has pulled the release, which is correct:
+  it doesn't write those streams until then. On the owner it moves to
+  `released` at once. `state.released` is history, not work in progress; the
+  history panel shows it.
+- **`Ownership.owners/1`** isn't needed: the owner is in `StreamInfo`.
 
-1. `stream_info/1`, `list_stream_infos/1`, `Ownership.owners/1`. The dashboard
-   moves off SQL for the streams table.
-2. `Sync.status/0` additions and `Ownership.list/0` states. The dashboard gets
-   sync cards in place of the totals.
-3. `subscribe_to_changes/1`. The dashboard stops polling.
-4. Quarantine paging and documenting history, with a history panel.
+## Not done
+
+- **Quarantine paging.** `Sync.quarantine/0` still returns every entry with
+  its payload. The dashboard shows only the count per peer, from
+  `Sync.status/0`.
+- **Documenting `"$sync"` and `"$ownership"` as public reads.** They work
+  with `read_stream_backward/2`, and the dashboard relies on that, but the
+  `SystemEvents` structs aren't yet documented as a stable contract.
+- **`Sync.verify/2` from the dashboard.** It compares whole histories over
+  distribution; it stays an iex tool.

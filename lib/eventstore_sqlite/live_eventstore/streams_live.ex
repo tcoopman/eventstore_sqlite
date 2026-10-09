@@ -3,11 +3,13 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     @moduledoc false
     use Phoenix.LiveView
 
-    alias EventstoreSqlite.LiveEventstore.Overview
+    alias EventstoreSqlite.Ownership
+    alias EventstoreSqlite.Sync
 
-    @refresh_options [{"Off", 0}, {"1s", 1_000}, {"5s", 5_000}, {"15s", 15_000}]
-    @default_refresh 5_000
-    @sorts %{"name" => :name, "events" => :events, "created" => :created}
+    @page_size 50
+    @history_size 15
+    @fallback_refresh 30_000
+    @resubscribe_after 100
 
     @impl true
     def mount(_params, session, socket) do
@@ -15,74 +17,94 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         assign(socket,
           base_path: session["base_path"],
           live_socket_path: session["live_socket_path"],
-          page_title: "Streams · live_eventstore",
-          refresh: @default_refresh,
-          refresh_options: @refresh_options,
-          timer: nil
+          page_title: "live_eventstore"
         )
 
-      {:ok, schedule_refresh(socket)}
+      if connected?(socket) do
+        subscribe()
+        Process.send_after(self(), :fallback_refresh, @fallback_refresh)
+      end
+
+      {:ok, load_sync(socket)}
     end
 
     @impl true
     def handle_params(params, _uri, socket) do
       filters = %{
         search: params |> Map.get("search", "") |> String.trim(),
-        sort: Map.get(@sorts, params["sort"], :name),
-        order: if(params["order"] == "desc", do: :desc, else: :asc),
-        page: positive_integer(params["page"], 1),
-        system: params["system"] == "true"
+        system: params["system"] == "true",
+        after: params["after"]
       }
 
-      {:noreply, socket |> assign(filters: filters) |> load()}
+      {:noreply, socket |> assign(filters: filters) |> load_streams()}
     end
 
     @impl true
     def handle_event("filter", params, socket) do
-      filters = %{socket.assigns.filters | search: params["search"] || "", system: params["system"] == "true", page: 1}
+      filters = %{search: params["search"] || "", system: params["system"] == "true", after: nil}
       {:noreply, push_patch(socket, to: path(socket.assigns.base_path, filters))}
     end
 
-    def handle_event("set_refresh", %{"refresh" => refresh}, socket) do
-      socket = assign(socket, refresh: positive_integer(refresh, 0))
-      {:noreply, schedule_refresh(socket)}
+    @impl true
+    def handle_info({:eventstore_sqlite, :changed, kinds}, socket) do
+      socket = if :streams in kinds, do: load_streams(socket), else: socket
+      socket = if :sync in kinds, do: load_sync(socket), else: socket
+      {:noreply, socket}
     end
 
-    @impl true
-    def handle_info(:refresh, socket), do: {:noreply, socket |> load() |> schedule_refresh()}
+    def handle_info(:fallback_refresh, socket) do
+      Process.send_after(self(), :fallback_refresh, @fallback_refresh)
+      {:noreply, socket |> load_streams() |> load_sync()}
+    end
 
-    defp load(socket) do
+    def handle_info({:DOWN, _ref, :process, _pid, _reason}, socket) do
+      Process.send_after(self(), :resubscribe, @resubscribe_after)
+      {:noreply, socket}
+    end
+
+    def handle_info(:resubscribe, socket) do
+      subscribe()
+      {:noreply, socket |> load_streams() |> load_sync()}
+    catch
+      :exit, _not_restarted_yet ->
+        Process.send_after(self(), :resubscribe, @resubscribe_after)
+        {:noreply, socket}
+    end
+
+    defp subscribe do
+      Process.monitor(EventstoreSqlite.Changes)
+      :ok = EventstoreSqlite.subscribe_to_changes(self())
+    end
+
+    defp load_streams(socket) do
       filters = socket.assigns.filters
 
-      streams =
-        Overview.streams(
+      page =
+        EventstoreSqlite.list_stream_infos(
           search: filters.search,
-          sort: filters.sort,
-          order: filters.order,
-          page: filters.page,
-          system: filters.system
+          system: filters.system,
+          after: filters.after,
+          limit: @page_size
         )
 
-      assign(socket, summary: Overview.summary(), page: streams)
+      assign(socket, page: page)
     end
 
-    defp schedule_refresh(socket) do
-      if socket.assigns.timer, do: Process.cancel_timer(socket.assigns.timer)
+    defp load_sync(socket) do
+      status = Sync.status()
 
-      timer =
-        if connected?(socket) and socket.assigns.refresh > 0,
-          do: Process.send_after(self(), :refresh, socket.assigns.refresh)
-
-      assign(socket, timer: timer)
-    end
-
-    defp positive_integer(nil, default), do: default
-
-    defp positive_integer(value, default) do
-      case Integer.parse(value) do
-        {integer, ""} when integer >= 0 -> integer
-        _ -> default
+      if status.enabled do
+        assign(socket, sync: status, assignments: Ownership.list(), history: history())
+      else
+        assign(socket, sync: status, assignments: [], history: [])
       end
+    end
+
+    defp history do
+      ["$sync", "$ownership"]
+      |> Enum.flat_map(&EventstoreSqlite.read_stream_backward(&1, count: @history_size))
+      |> Enum.sort_by(&{&1.created_at, &1.id}, &>=/2)
+      |> Enum.take(@history_size)
     end
 
     defp path(base_path, filters) do
@@ -91,9 +113,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           [
             search: if(filters.search != "", do: filters.search),
             system: if(filters.system, do: "true"),
-            sort: if(filters.sort != :name, do: Atom.to_string(filters.sort)),
-            order: if(filters.order == :desc, do: "desc"),
-            page: if(filters.page > 1, do: Integer.to_string(filters.page))
+            after: filters.after
           ],
           fn {_key, value} -> is_nil(value) end
         )
@@ -102,18 +122,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       if query == [], do: root, else: root <> "?" <> URI.encode_query(query)
     end
 
-    defp sort_path(base_path, filters, sort) do
-      order = if filters.sort == sort and filters.order == :asc, do: :desc, else: :asc
-      path(base_path, %{filters | sort: sort, order: order, page: 1})
-    end
-
-    defp sort_marker(filters, sort) do
-      cond do
-        filters.sort != sort -> ""
-        filters.order == :asc -> " ↑"
-        true -> " ↓"
-      end
-    end
+    defp number(nil), do: "—"
 
     defp number(integer) do
       integer
@@ -124,10 +133,25 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     end
 
     defp time(nil), do: "—"
-    defp time(timestamp), do: timestamp |> String.replace("T", " ") |> String.trim_trailing("Z")
+    defp time(%DateTime{} = datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S")
 
+    defp owner(nil), do: ""
     defp owner({node_id, 0}), do: node_id
     defp owner({node_id, generation}), do: "#{node_id} · gen #{generation}"
+
+    defp peer_state_class(state) when state in [:connected, :drained], do: "badge"
+    defp peer_state_class(_state), do: "badge bad"
+
+    defp event_name(%{data: %type{}}), do: type |> Module.split() |> List.last()
+
+    defp event_fields(%{data: data}) do
+      data
+      |> Map.from_struct()
+      |> Enum.map_join(", ", fn {key, value} -> "#{key}: #{inspect(value)}" end)
+    end
+
+    defp plural(1, word), do: "1 #{word}"
+    defp plural(count, word), do: "#{number(count)} #{word}s"
 
     @impl true
     def render(assigns) do
@@ -135,52 +159,89 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       <header>
         <h1>live_eventstore</h1>
         <span class="node">
-          <%= if @summary.sync.enabled do %>
-            node <strong>{@summary.sync.node_id}</strong>
-            <span class="badge">{if @summary.sync.home?, do: "home", else: "peer of #{@summary.sync.home}"}</span>
-            <span :if={@summary.sync.diverged} class="badge bad">diverged</span>
+          <%= if @sync.enabled do %>
+            node <strong>{@sync.node_id}</strong>
+            <span class="badge">{if @sync.home?, do: "home", else: "peer of #{@sync.home}"}</span>
+            <span :if={@sync.diverged} class="badge bad">diverged</span>
           <% else %>
             single node
           <% end %>
         </span>
-        <form class="right" phx-change="set_refresh">
-          <label for="refresh">Refresh</label>
-          <select id="refresh" name="refresh">
-            <option :for={{label, value} <- @refresh_options} value={value} selected={value == @refresh}>
-              {label}
-            </option>
-          </select>
-        </form>
+        <span class="right">updates live</span>
       </header>
 
       <main>
-        <section class="cards">
-          <div class="card">
-            <div class="label">Streams</div>
-            <div class="value" id="summary-streams">{number(@summary.streams)}</div>
-            <div class="sub">{@summary.system_streams} system</div>
+        <section :if={@sync.enabled} id="sync">
+          <div class="cards">
+            <div class="card">
+              <div class="label">Change log</div>
+              <div class="value" id="log-entries">{plural(@sync.log.entries, "entry")}</div>
+              <div class="sub">retained for peers · head {number(@sync.head)}</div>
+            </div>
+            <div class="card">
+              <div class="label">Peers</div>
+              <div class="value">{map_size(@sync.peers)}</div>
+              <div class="sub">{plural(length(@assignments), "assignment")}</div>
+            </div>
+            <div :if={@sync.diverged} class="card">
+              <div class="label">Diverged</div>
+              <div class="value">revoked by {@sync.diverged.revoked_by}</div>
+              <div class="sub">this node refuses every write</div>
+            </div>
           </div>
-          <div class="card">
-            <div class="label">Events</div>
-            <div class="value" id="summary-events">{number(@summary.events)}</div>
-            <div class="sub">in live streams</div>
-          </div>
-          <div class="card">
-            <div class="label">$all position</div>
-            <div class="value">{number(@summary.all_position)}</div>
-            <div class="sub">next position on this node</div>
-          </div>
-          <div class="card">
-            <div class="label">Archived streams</div>
-            <div class="value">{number(@summary.archived_streams)}</div>
-          </div>
-          <div :if={@summary.sync.enabled} class="card">
-            <div class="label">Sync</div>
-            <div class="value">{length(@summary.sync.peers)} peer{if length(@summary.sync.peers) == 1, do: "", else: "s"}</div>
-            <div class="sub">{@summary.sync.assignments} assignment{if @summary.sync.assignments == 1, do: "", else: "s"}</div>
-          </div>
+
+          <h2>Peers</h2>
+          <table id="peers">
+            <thead>
+              <tr>
+                <th>Peer</th>
+                <th>State</th>
+                <th class="num">Lag</th>
+                <th>Last applied</th>
+                <th>Last success</th>
+                <th class="num">Acked</th>
+                <th class="num">Quarantined</th>
+                <th>Owns</th>
+                <th>Problem</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={{peer, status} <- Enum.sort(@sync.peers)}>
+                <td class="name">{peer}</td>
+                <td><span class={peer_state_class(status.state)}>{status.state}</span></td>
+                <td class="num">{number(status.lag)}</td>
+                <td class="time">{time(status.last_applied_at)}</td>
+                <td class="time">{time(status.last_success)}</td>
+                <td class="num">{number(status.acked)}</td>
+                <td class="num">{number(status.quarantined)}</td>
+                <td>{Enum.map_join(status.owns, ", ", &"gen #{&1}")}</td>
+                <td class="problem">
+                  <span :if={status.halted}>halted: {inspect(status.halted)}</span>
+                  <span :if={!status.halted && status.last_error}>{inspect(status.last_error)}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div :if={@sync.peers == %{}} class="empty">No peers.</div>
+
+          <%= if @assignments != [] do %>
+            <h2>Assignments</h2>
+            <table id="assignments">
+              <thead>
+                <tr><th class="num">Generation</th><th>Streams</th><th>Owner</th></tr>
+              </thead>
+              <tbody>
+                <tr :for={assignment <- @assignments}>
+                  <td class="num">{assignment.generation}</td>
+                  <td class="name">{assignment.selector}</td>
+                  <td>{assignment.owner}</td>
+                </tr>
+              </tbody>
+            </table>
+          <% end %>
         </section>
 
+        <h2>Streams</h2>
         <form id="filter" class="toolbar" phx-change="filter" phx-submit="filter">
           <input
             type="search"
@@ -194,46 +255,55 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
             <input type="hidden" name="system" value="false" />
             <input type="checkbox" name="system" value="true" checked={@filters.system} /> system streams
           </label>
-          <span class="count" id="stream-count">
-            {number(@page.total)} stream{if @page.total == 1, do: "", else: "s"}
-          </span>
         </form>
 
         <table id="streams">
           <thead>
             <tr>
-              <th><.link patch={sort_path(@base_path, @filters, :name)} class={@filters.sort == :name && "active"}>Stream{sort_marker(@filters, :name)}</.link></th>
-              <th class="num"><.link patch={sort_path(@base_path, @filters, :events)} class={@filters.sort == :events && "active"}>Events{sort_marker(@filters, :events)}</.link></th>
-              <th><.link patch={sort_path(@base_path, @filters, :created)} class={@filters.sort == :created && "active"}>Created{sort_marker(@filters, :created)}</.link></th>
+              <th>Stream</th>
+              <th class="num">Version</th>
+              <th>Created</th>
               <th>Last event</th>
-              <th :if={@summary.sync.enabled}>Owner</th>
+              <th :if={@sync.enabled}>Owner</th>
             </tr>
           </thead>
           <tbody>
-            <tr :for={stream <- @page.entries} class={stream.system? && "system"}>
+            <tr :for={stream <- @page.entries} class={stream.stream_id in EventstoreSqlite.system_streams() && "system"}>
               <td class="name">{stream.stream_id}</td>
-              <td class="num">{number(stream.events)}</td>
+              <td class="num">{number(stream.version)}</td>
               <td class="time">{time(stream.created_at)}</td>
               <td class="time">{time(stream.last_event_at)}</td>
-              <td :if={@summary.sync.enabled}>{stream.owner && owner(stream.owner)}</td>
+              <td :if={@sync.enabled}>{owner(stream.owner)}</td>
             </tr>
           </tbody>
         </table>
         <div :if={@page.entries == []} class="empty">No streams match.</div>
 
-        <nav :if={@page.pages > 1} class="pager">
-          <%= if @page.page > 1 do %>
-            <.link patch={path(@base_path, %{@filters | page: @page.page - 1})}>← Previous</.link>
+        <nav :if={@filters.after || @page.next} class="pager">
+          <%= if @filters.after do %>
+            <.link patch={path(@base_path, %{@filters | after: nil})}>← First page</.link>
           <% else %>
-            <span class="disabled">← Previous</span>
+            <span class="disabled">← First page</span>
           <% end %>
-          <span>Page {@page.page} of {@page.pages}</span>
-          <%= if @page.page < @page.pages do %>
-            <.link patch={path(@base_path, %{@filters | page: @page.page + 1})}>Next →</.link>
+          <%= if @page.next do %>
+            <.link patch={path(@base_path, %{@filters | after: @page.next})}>Next →</.link>
           <% else %>
             <span class="disabled">Next →</span>
           <% end %>
         </nav>
+
+        <section :if={@history != []} id="history">
+          <h2>Sync history</h2>
+          <table>
+            <tbody>
+              <tr :for={event <- @history}>
+                <td class="time">{time(event.created_at)}</td>
+                <td>{event_name(event)}</td>
+                <td class="fields">{event_fields(event)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
       </main>
       """
     end

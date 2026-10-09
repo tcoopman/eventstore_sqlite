@@ -13,10 +13,13 @@ event, with exactly one node allowed to write each stream. See
 ## live_eventstore: a dashboard for your router
 
 A read-only LiveView page of the store, mounted like Phoenix LiveDashboard. It
-shows totals, the streams with their event counts and timestamps (searchable,
-sortable, paged), and, with sync enabled, this node's role and the owner of
-each stream. It needs `phoenix_live_view` in your application; this library
-only depends on it optionally.
+shows the streams with their versions and timestamps (searchable and paged by
+name) and, with sync enabled, this node's role, its peers (state, lag, last
+applied entry, errors), the change log, ownership assignments with each
+stream's owner, and recent sync history. It updates when the store changes,
+through `EventstoreSqlite.subscribe_to_changes/1`, and only uses the public
+API. It needs `phoenix_live_view` in your application; this library only
+depends on it optionally.
 
 ```elixir
 # router.ex

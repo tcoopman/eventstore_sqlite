@@ -257,6 +257,37 @@ defmodule EventstoreSqlite.Store do
     end
   end
 
+  @doc """
+  Live streams as `[stream_id, version, first_event_at, last_event_at]` rows,
+  ordered by name. `conditions` are `{sql, params}` pairs on `s.stream_id`,
+  each with `?` placeholders.
+  """
+  def stream_rows(repo, conditions, limit) do
+    where = Enum.map_join(conditions, " AND ", &elem(&1, 0))
+    params = Enum.flat_map(conditions, &elem(&1, 1))
+
+    SQL.query!(
+      repo,
+      """
+      SELECT s.stream_id, s.stream_version,
+             (#{event_time_sql("ASC")}),
+             (#{event_time_sql("DESC")})
+      FROM streams s
+      #{if where != "", do: "WHERE " <> where}
+      ORDER BY s.stream_id
+      LIMIT ?
+      """,
+      params ++ [limit]
+    ).rows
+  end
+
+  defp event_time_sql(order) do
+    """
+    SELECT e.inserted_at FROM stream_events se JOIN events e ON e.id = se.event_id
+    WHERE se.stream_id = s.stream_id ORDER BY se.stream_version #{order} LIMIT 1
+    """
+  end
+
   defp delete_stream(repo, stream_id) do
     SQL.query!(repo, "DELETE FROM stream_events WHERE stream_id = ?2 AND original_stream_id = ?1", [
       stream_id,

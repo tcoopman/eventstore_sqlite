@@ -2,6 +2,7 @@ defmodule EventstoreSqlite.Sync.Import do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
+  alias EventstoreSqlite.Changes
   alias EventstoreSqlite.RepoWrite
   alias EventstoreSqlite.Store
   alias EventstoreSqlite.Subscriptions
@@ -46,6 +47,8 @@ defmodule EventstoreSqlite.Sync.Import do
             end,
             mode: :immediate
           )
+
+          Changes.notify(:sync)
         end
 
         {:ok, %{cursor: cursor(EventstoreSqlite.RepoRead, origin), quarantined: 0}}
@@ -345,6 +348,7 @@ defmodule EventstoreSqlite.Sync.Import do
   defp after_commit(streams) do
     Enum.each(streams, &Subscriptions.ping/1)
     Enum.each(["$all", State.sync_stream(), State.ownership_stream()], &Subscriptions.ping/1)
+    Changes.notify([:streams, :sync])
   end
 
   def cursor(repo, origin) do
@@ -358,9 +362,13 @@ defmodule EventstoreSqlite.Sync.Import do
     SQL.query!(
       repo,
       """
-      INSERT INTO sync_cursors (origin, seq, origin_head, origin_diverged) VALUES (?1, ?2, ?3, ?4)
+      INSERT INTO sync_cursors (origin, seq, origin_head, origin_diverged, applied_at)
+      VALUES (?1, ?2, ?3, ?4, CASE WHEN ?2 > 0 THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') END)
       ON CONFLICT (origin) DO UPDATE
-        SET seq = excluded.seq, origin_head = excluded.origin_head, origin_diverged = excluded.origin_diverged
+        SET seq = excluded.seq,
+            origin_head = excluded.origin_head,
+            origin_diverged = excluded.origin_diverged,
+            applied_at = CASE WHEN excluded.seq > sync_cursors.seq THEN excluded.applied_at ELSE sync_cursors.applied_at END
       """,
       [origin, seq, origin_status.head, if(origin_status.diverged, do: 1, else: 0)]
     )

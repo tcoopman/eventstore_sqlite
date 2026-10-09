@@ -3,6 +3,7 @@ defmodule EventstoreSqlite.Sync.Acks do
   use GenServer
 
   alias Ecto.Adapters.SQL
+  alias EventstoreSqlite.Changes
   alias EventstoreSqlite.RepoWrite
   alias EventstoreSqlite.Sync.Export
   alias EventstoreSqlite.Sync.Failpoint
@@ -38,28 +39,31 @@ defmodule EventstoreSqlite.Sync.Acks do
   defp write(pending) when map_size(pending) == 0, do: pending
 
   defp write(pending) do
-    RepoWrite.transact(
-      fn repo ->
-        state = State.load(repo)
+    {:ok, advanced?} = RepoWrite.transact(&record_acks(&1, pending), mode: :immediate)
+    if advanced?, do: Changes.notify(:sync)
+    %{}
+  end
 
-        for {peer, seq} <- pending, Map.has_key?(state.peers, peer) do
+  defp record_acks(repo, pending) do
+    state = State.load(repo)
+
+    advanced =
+      for {peer, seq} <- pending, Map.has_key?(state.peers, peer) do
+        %{num_rows: rows} =
           SQL.query!(
             repo,
             """
             INSERT INTO sync_acks (peer, seq) VALUES (?1, ?2)
-            ON CONFLICT (peer) DO UPDATE SET seq = max(seq, excluded.seq)
+            ON CONFLICT (peer) DO UPDATE SET seq = excluded.seq WHERE excluded.seq > sync_acks.seq
             """,
             [peer, seq]
           )
-        end
 
-        Failpoint.hit(:between_ack_and_prune)
-        Export.prune(repo, state)
-        {:ok, :done}
-      end,
-      mode: :immediate
-    )
+        rows
+      end
 
-    %{}
+    Failpoint.hit(:between_ack_and_prune)
+    Export.prune(repo, state)
+    {:ok, Enum.sum(advanced) > 0}
   end
 end

@@ -41,6 +41,18 @@ defmodule EventstoreSqlite.Sync.Log do
     end
   end
 
+  @doc """
+  The oldest entry still in the log, and how many are retained. Entries are
+  only ever pruned from the start, and a rolled-back append hands out no seq,
+  so the log holds every seq from `oldest` to the head.
+  """
+  def retained(repo) do
+    case SQL.query!(repo, "SELECT min(seq) FROM sync_log") do
+      %{rows: [[nil]]} -> %{oldest: nil, entries: 0}
+      %{rows: [[oldest]]} -> %{oldest: oldest, entries: head(repo) - oldest + 1}
+    end
+  end
+
   def exists?(repo, seq) do
     %{rows: rows} = SQL.query!(repo, "SELECT 1 FROM sync_log WHERE seq = ?1", [seq])
     rows != []
