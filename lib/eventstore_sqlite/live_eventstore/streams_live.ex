@@ -2,7 +2,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
   defmodule EventstoreSqlite.LiveEventstore.StreamsLive do
     @moduledoc false
     use Phoenix.LiveView
-    use Fluxon, only: [:badge, :button, :checkbox, :input, :table]
+    use Fluxon, only: [:badge, :checkbox, :input, :table]
 
     import EventstoreSqlite.LiveEventstore.Helpers
     import EventstoreSqlite.LiveEventstore.Layouts, only: [page: 1, card: 1, section_title: 1, pager_button: 1]
@@ -130,6 +130,24 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
       |> Enum.map_join(", ", fn {key, value} -> "#{key}: #{inspect(value)}" end)
     end
 
+    attr :base_path, :string, required: true
+    attr :filters, :map, required: true
+    attr :order, :atom, required: true
+    attr :arrow, :string, required: true
+    slot :inner_block, required: true
+
+    defp sort_link(assigns) do
+      ~H"""
+      <.link
+        id={"sort-#{@order}"}
+        patch={streams_path(@base_path, %{@filters | order: @order, after: nil})}
+        class={["hover:text-foreground", @filters.order == @order && "text-foreground"]}
+      >
+        {render_slot(@inner_block)} <span :if={@filters.order == @order}>{@arrow}</span>
+      </.link>
+      """
+    end
+
     @impl true
     def render(assigns) do
       ~H"""
@@ -221,24 +239,18 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
               />
             </div>
             <.checkbox name="system" value="true" checked={@filters.system} label="System streams" />
-            <.button_group id="sort">
-              <.button
-                :for={{order, label} <- [newest: "Newest first", name: "By name"]}
-                size="sm"
-                variant={if @filters.order == order, do: "solid", else: "outline"}
-                patch={streams_path(@base_path, %{@filters | order: order, after: nil})}
-              >
-                {label}
-              </.button>
-            </.button_group>
           </form>
 
           <div class="surface rounded-base overflow-x-auto">
             <.table id="streams">
               <.table_head>
-                <:col>Stream</:col>
+                <:col>
+                  <.sort_link base_path={@base_path} filters={@filters} order={:name} arrow="↑">Stream</.sort_link>
+                </:col>
                 <:col class="text-right">Version</:col>
-                <:col>Created</:col>
+                <:col>
+                  <.sort_link base_path={@base_path} filters={@filters} order={:newest} arrow="↓">Created</.sort_link>
+                </:col>
                 <:col>Last event</:col>
                 <:col :if={@sync.enabled}>Owner</:col>
               </.table_head>

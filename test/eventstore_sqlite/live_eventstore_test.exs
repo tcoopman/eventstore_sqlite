@@ -82,11 +82,11 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       assert_patch(view, "/eventstore?search=page")
     end
 
-    test "sorts by name on request, paging by name", %{conn: conn} do
+    test "the column headers sort by name or newest first", %{conn: conn} do
       for i <- 1..60, do: :ok = EventstoreSqlite.append_to_stream("page:#{String.pad_leading("#{i}", 2, "0")}", notes(1))
 
       {:ok, view, _html} = live(conn, "/eventstore?search=page")
-      view |> element("#sort a", "By name") |> render_click()
+      view |> element("#sort-name") |> render_click()
       assert_patch(view, "/eventstore?search=page&sort=name")
       assert view |> element("#streams tbody") |> render() =~ "page:50"
       refute view |> element("#streams tbody") |> render() =~ "page:51"
@@ -94,6 +94,10 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       view |> element(".pager a", "Next") |> render_click()
       assert_patch(view, "/eventstore?search=page&sort=name&after=page%3A50")
       assert view |> element("#streams tbody") |> render() =~ "page:51"
+
+      view |> element("#sort-newest") |> render_click()
+      assert_patch(view, "/eventstore?search=page")
+      assert view |> element("#sort-newest") |> render() =~ "↓"
     end
 
     test "shows system streams on request", %{conn: conn} do
