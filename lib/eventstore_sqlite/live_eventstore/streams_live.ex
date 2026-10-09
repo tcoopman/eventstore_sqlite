@@ -2,7 +2,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
   defmodule EventstoreSqlite.LiveEventstore.StreamsLive do
     @moduledoc false
     use Phoenix.LiveView
-    use Fluxon, only: [:badge, :checkbox, :input, :table]
+    use Fluxon, only: [:badge, :button, :checkbox, :input, :table]
 
     import EventstoreSqlite.LiveEventstore.Helpers
     import EventstoreSqlite.LiveEventstore.Layouts, only: [page: 1, card: 1, section_title: 1, pager_button: 1]
@@ -36,6 +36,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
       filters = %{
         search: params |> Map.get("search", "") |> String.trim(),
         system: params["system"] == "true",
+        order: if(params["sort"] == "name", do: :name, else: :newest),
         after: params["after"]
       }
 
@@ -83,6 +84,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
         EventstoreSqlite.list_stream_infos(
           search: filters.search,
           system: filters.system,
+          order: filters.order,
           after: filters.after,
           limit: @page_size
         )
@@ -108,7 +110,12 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
     end
 
     defp streams_path(base_path, filters) do
-      path(base_path, "", search: filters.search, system: filters.system && "true", after: filters.after)
+      path(base_path, "",
+        search: filters.search,
+        system: filters.system && "true",
+        sort: filters.order == :name && "name",
+        after: filters.after
+      )
     end
 
     defp peer_color(state) when state in [:connected, :drained], do: "success"
@@ -214,6 +221,16 @@ if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
               />
             </div>
             <.checkbox name="system" value="true" checked={@filters.system} label="System streams" />
+            <.button_group id="sort">
+              <.button
+                :for={{order, label} <- [newest: "Newest first", name: "By name"]}
+                size="sm"
+                variant={if @filters.order == order, do: "solid", else: "outline"}
+                patch={streams_path(@base_path, %{@filters | order: order, after: nil})}
+              >
+                {label}
+              </.button>
+            </.button_group>
           </form>
 
           <div class="surface rounded-base overflow-x-auto">

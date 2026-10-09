@@ -64,21 +64,36 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       refute table =~ "orders:1"
     end
 
-    test "pages by name", %{conn: conn} do
+    test "lists the newest streams first, a page at a time", %{conn: conn} do
       for i <- 1..60, do: :ok = EventstoreSqlite.append_to_stream("page:#{String.pad_leading("#{i}", 2, "0")}", notes(1))
 
       {:ok, view, _html} = live(conn, "/eventstore?search=page")
+      rows = view |> element("#streams tbody") |> render()
+      assert :binary.match(rows, "page:60") < :binary.match(rows, "page:59")
+      assert rows =~ "page:11"
+      refute rows =~ "page:10"
+
+      view |> element(".pager a", "Next") |> render_click()
+      rows = view |> element("#streams tbody") |> render()
+      assert rows =~ "page:10"
+      refute rows =~ "page:11"
+
+      view |> element(".pager a", "First page") |> render_click()
+      assert_patch(view, "/eventstore?search=page")
+    end
+
+    test "sorts by name on request, paging by name", %{conn: conn} do
+      for i <- 1..60, do: :ok = EventstoreSqlite.append_to_stream("page:#{String.pad_leading("#{i}", 2, "0")}", notes(1))
+
+      {:ok, view, _html} = live(conn, "/eventstore?search=page")
+      view |> element("#sort a", "By name") |> render_click()
+      assert_patch(view, "/eventstore?search=page&sort=name")
       assert view |> element("#streams tbody") |> render() =~ "page:50"
       refute view |> element("#streams tbody") |> render() =~ "page:51"
 
       view |> element(".pager a", "Next") |> render_click()
-      assert_patch(view, "/eventstore?search=page&after=page%3A50")
-      rows = view |> element("#streams tbody") |> render()
-      assert rows =~ "page:51"
-      refute rows =~ "page:50"
-
-      view |> element(".pager a", "First page") |> render_click()
-      assert_patch(view, "/eventstore?search=page")
+      assert_patch(view, "/eventstore?search=page&sort=name&after=page%3A50")
+      assert view |> element("#streams tbody") |> render() =~ "page:51"
     end
 
     test "shows system streams on request", %{conn: conn} do

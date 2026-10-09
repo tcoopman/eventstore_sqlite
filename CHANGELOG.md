@@ -39,8 +39,9 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
   router, like LiveDashboard: `import EventstoreSqlite.LiveEventstore.Router`,
   then `live_eventstore "/eventstore"` inside a scope that pipes through your
   browser pipeline. It shows:
-  - every stream with its version, creation time and last event time,
-    searchable by name and paged, with system streams on request;
+  - every stream with its version, creation time and last event time, the
+    newest first or by name, searchable by name and paged, with system
+    streams on request;
   - with sync enabled, this node's role, its peers (state, lag, last applied
     entry, last success, acknowledged entry, quarantined entries, owned
     generations, halts and errors), the change log, the ownership
