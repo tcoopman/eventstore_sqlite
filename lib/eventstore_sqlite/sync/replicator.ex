@@ -26,6 +26,7 @@ defmodule EventstoreSqlite.Sync.Replicator do
   def status(peer) do
     GenServer.call(via(peer), :status, 1_000)
   catch
+    :exit, {:timeout, _} -> %{connection: :busy, last_error: nil, last_success: nil}
     :exit, _ -> %{connection: :not_running, last_error: nil, last_success: nil}
   end
 
@@ -115,6 +116,7 @@ defmodule EventstoreSqlite.Sync.Replicator do
     end
   catch
     :error, {:erpc, reason} -> backoff(%{state | connection: :disconnected}, {:erpc, reason})
+    :error, {:exception, reason, _stack} -> backoff(state, {:remote_exception, reason})
     :exit, reason -> backoff(%{state | connection: :disconnected}, {:exit, reason})
   end
 

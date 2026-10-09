@@ -127,13 +127,16 @@ defmodule EventstoreSqlite.Cluster do
   @doc """
   Waits until `node` has pulled everything `peer` reported.
   """
-  def caught_up(node, peer) do
-    wait_until(fn ->
-      case status(node).peers[peer.node_id] do
-        %{lag: 0, peer_head: head} = status when is_integer(head) -> head == status(peer).head and status
-        _ -> false
-      end
-    end)
+  def caught_up(node, peer, timeout \\ 10_000) do
+    wait_until(
+      fn ->
+        case status(node).peers[peer.node_id] do
+          %{lag: 0, peer_head: head} = status when is_integer(head) -> head == status(peer).head and status
+          _ -> false
+        end
+      end,
+      timeout
+    )
   end
 
   @doc """
@@ -167,6 +170,8 @@ defmodule EventstoreSqlite.Cluster.Remote do
   Runs on a cluster node.
   """
 
+  alias Ecto.Adapters.SQL
+  alias EventstoreSqlite.Sync.Export
   alias EventstoreSqlite.Test.Note
 
   def boot(env) do
@@ -241,7 +246,10 @@ defmodule EventstoreSqlite.Cluster.Remote do
         id = Ecto.UUID.generate()
         event = %EventstoreSqlite.NewEvent{id: id, data: %Note{text: "#{stream}@#{version}"}}
 
-        case EventstoreSqlite.append_to_stream(stream, [event], {:version, version}) do
+        case safe_append(stream, event, version) do
+          :raised ->
+            write_loop(coordinator, stream, nil, pause)
+
           :ok ->
             send(coordinator, {:acked, stream, version, id})
             write_loop(coordinator, stream, version + 1, pause)
@@ -253,6 +261,12 @@ defmodule EventstoreSqlite.Cluster.Remote do
             send(coordinator, {:done, self(), stream, reason})
         end
     end
+  end
+
+  defp safe_append(stream, event, version) do
+    EventstoreSqlite.append_to_stream(stream, [event], {:version, version})
+  rescue
+    DBConnection.ConnectionError -> :raised
   end
 
   defp current_version(stream) do
@@ -269,6 +283,10 @@ defmodule EventstoreSqlite.Cluster.Remote do
 
       {:done, pid, stream, reason} ->
         coordinate(writers -- [pid], acked, Map.put(done, stream, reason))
+
+      {:drain, from} ->
+        send(from, {:drained, Enum.reverse(acked), length(writers)})
+        coordinate(writers, [], done)
 
       {:stop, from} ->
         Enum.each(writers, &send(&1, :stop))
@@ -296,6 +314,111 @@ defmodule EventstoreSqlite.Cluster.Remote do
       {:writers, acked, done} -> {acked, done}
     after
       30_000 -> :timeout
+    end
+  end
+
+  @doc """
+  Returns `{acked, running_writers}`: the writes acknowledged since the last
+  drain, and how many writers still run.
+  """
+  def drain_acks(coordinator) do
+    send(coordinator, {:drain, self()})
+
+    receive do
+      {:drained, acked, running} -> {acked, running}
+    after
+      5_000 -> {[], 0}
+    end
+  end
+
+  def event_ids do
+    "SELECT id FROM events"
+    |> then(&SQL.query!(EventstoreSqlite.RepoRead, &1, []).rows)
+    |> MapSet.new(fn [id] -> id end)
+  end
+
+  def all_stream_check do
+    [[all_rows, distinct_ids, live_rows]] =
+      SQL.query!(
+        EventstoreSqlite.RepoRead,
+        """
+        SELECT (SELECT count(*) FROM stream_events WHERE stream_id = '$all'),
+               (SELECT count(DISTINCT event_id) FROM stream_events WHERE stream_id = '$all'),
+               (SELECT count(*) FROM stream_events WHERE substr(stream_id, 1, 1) <> '$')
+        """,
+        []
+      ).rows
+
+    %{all_rows: all_rows, distinct_ids: distinct_ids, live_rows: live_rows}
+  end
+
+  def replicator_info(peer) do
+    case Registry.lookup(EventstoreSqlite.Sync.Registry, peer) do
+      [{pid, _}] ->
+        info = Process.info(pid, [:current_function, :message_queue_len, :status])
+        state = :sys.get_state(pid, 2_000)
+        timer = state.timer && Process.read_timer(state.timer)
+        %{process: info, state: Map.delete(state, :timer), timer_ms_left: timer}
+
+      [] ->
+        :no_replicator
+    end
+  catch
+    kind, reason -> {kind, reason}
+  end
+
+  def export_as(peer_id, after_seq) do
+    state = EventstoreSqlite.Sync.State.load(EventstoreSqlite.RepoRead)
+
+    request = %{
+      protocol: Export.protocol(),
+      sync_id: state.sync_id,
+      from: peer_id,
+      expect: state.node_id,
+      after_seq: after_seq,
+      max_entries: 5,
+      max_bytes: 1_000_000
+    }
+
+    case Export.read_only(request) do
+      {:ok, response} -> %{head: response.head, seqs: Enum.map(response.entries, & &1.seq)}
+      other -> other
+    end
+  end
+
+  def sync_tables do
+    q = &SQL.query!(EventstoreSqlite.RepoRead, &1, []).rows
+
+    %{
+      log: q.("SELECT min(seq), max(seq), count(*) FROM sync_log"),
+      sequence: q.("SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'"),
+      acks: q.("SELECT * FROM sync_acks"),
+      cursors: q.("SELECT * FROM sync_cursors"),
+      halts:
+        Enum.filter(
+          Enum.map(EventstoreSqlite.read_stream_forward("$sync", count: nil), & &1.data),
+          &match?(%EventstoreSqlite.SystemEvents.SyncHalted{}, &1)
+        )
+    }
+  end
+
+  def stream_dump(stream) do
+    q = &SQL.query!(EventstoreSqlite.RepoRead, &1, [stream]).rows
+
+    %{
+      live: q.("SELECT stream_version, event_id FROM stream_events WHERE stream_id = ?1 ORDER BY stream_version"),
+      archived:
+        q.("""
+        SELECT a.id, e.stream_version, e.event_id FROM archived_streams a
+        JOIN archived_stream_events e ON e.archive_id = a.id WHERE a.stream_id = ?1 ORDER BY a.id, e.stream_version
+        """)
+    }
+  end
+
+  def kill_replicator(peer) do
+    case Registry.lookup(EventstoreSqlite.Sync.Registry, peer) do
+      [{pid, _}] -> Process.exit(pid, :kill)
+      [] -> false
     end
   end
 

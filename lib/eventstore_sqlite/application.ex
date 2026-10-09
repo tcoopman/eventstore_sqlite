@@ -9,9 +9,7 @@ defmodule EventstoreSqlite.Application do
       EventstoreSqlite.RepoRead,
       EventstoreSqlite.Subscriptions,
       %{id: :pg, start: {:pg, :start_link, [EventstoreSqlite.Sync.Write.pg_scope()]}},
-      {Registry, keys: :unique, name: EventstoreSqlite.Sync.Registry},
-      {DynamicSupervisor, name: EventstoreSqlite.Sync.ReplicatorSupervisor, strategy: :one_for_one},
-      EventstoreSqlite.Sync.Server
+      EventstoreSqlite.Sync.Supervisor
     ]
 
     opts = [strategy: :one_for_one, name: EventstoreSqlite.Supervisor]

@@ -92,6 +92,23 @@ defmodule EventstoreSqlite.Sync.ClusterFailureTest do
     stop(second)
   end
 
+  test "replication comes back after its replicator keeps crashing" do
+    {home, second} = pair()
+
+    for _ <- 1..5 do
+      wait_until(fn -> call(second, Registry, :lookup, [EventstoreSqlite.Sync.Registry, "main-node"]) != [] end)
+      call(second, Remote, :kill_replicator, ["main-node"])
+      Process.sleep(20)
+    end
+
+    :ok = append(home, "orders:1", notes(["after the crashes"]))
+    converged(home, second)
+    assert texts(second, "orders:1") == ["after the crashes"]
+
+    stop(home)
+    stop(second)
+  end
+
   test "a snapshot taken while the home node writes converges" do
     home = start!("main-node")
     :ok = call(home, Sync, :enable, ["main-node"])

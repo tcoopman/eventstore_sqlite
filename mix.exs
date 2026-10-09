@@ -15,7 +15,7 @@ defmodule EventstoreSqlite.MixProject do
   end
 
   def cli do
-    [preferred_envs: [precommit: :test]]
+    [preferred_envs: [precommit: :test, "eventstore.sync_stress": :test]]
   end
 
   # Configuration for the OTP application.
@@ -30,6 +30,7 @@ defmodule EventstoreSqlite.MixProject do
 
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:dev), do: ["lib", "dev"]
   defp elixirc_paths(_), do: ["lib"]
   # Run "mix help deps" to learn about dependencies.
   defp deps do
@@ -54,7 +55,8 @@ defmodule EventstoreSqlite.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"],
+      "eventstore.sync_stress": ["test --only stress test/eventstore_sqlite/sync/stress_test.exs"]
     ]
   end
 end

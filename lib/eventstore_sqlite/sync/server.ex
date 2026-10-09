@@ -13,6 +13,7 @@ defmodule EventstoreSqlite.Sync.Server do
   require Logger
 
   @replicators EventstoreSqlite.Sync.ReplicatorSupervisor
+  @check_interval 5_000
 
   def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
@@ -39,6 +40,7 @@ defmodule EventstoreSqlite.Sync.Server do
 
     case result do
       :ok ->
+        schedule_check()
         {:ok, sync_processes(%{node_id: nil})}
 
       {:error, message} ->
@@ -54,6 +56,14 @@ defmodule EventstoreSqlite.Sync.Server do
     reply = Snapshot.create(path, peer)
     {:reply, reply, sync_processes(state)}
   end
+
+  @impl true
+  def handle_info(:check, state) do
+    schedule_check()
+    {:noreply, sync_processes(state)}
+  end
+
+  defp schedule_check, do: Process.send_after(self(), :check, @check_interval)
 
   defp sync_processes(server) do
     sync = State.load(RepoWrite)

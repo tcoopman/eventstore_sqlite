@@ -22,6 +22,7 @@ defmodule EventstoreSqlite.DataCase do
   use ExUnit.CaseTemplate
 
   alias Ecto.Adapters.SQL
+  alias EventstoreSqlite.Sync.Acks
 
   using do
     quote do
@@ -50,6 +51,7 @@ defmodule EventstoreSqlite.DataCase do
   """
   def reset! do
     repo = EventstoreSqlite.RepoWrite
+    if Process.whereis(Acks), do: Acks.flush()
 
     Enum.each(
       [

@@ -18,6 +18,46 @@ defmodule EventstoreSqlite.Sync do
       config :eventstore_sqlite, :sync, node_id: "main-node"
 
   The store refuses to start when its database belongs to another node id.
+
+  ## Lifecycle
+
+  On the home node:
+
+      :ok = EventstoreSqlite.Sync.enable("main-node")
+      {:ok, _} = EventstoreSqlite.Sync.snapshot("secondary.db", peer: "secondary-node-1")
+
+  Start the second node on `secondary.db` with `node_id: "secondary-node-1"`
+  and connect the nodes over Erlang distribution (for example with
+  libcluster). The nodes find each other by node id; the second node pulls
+  everything written since the snapshot, and the home node pulls from it.
+  Each node's subscribers receive the other node's events like local ones.
+
+  Then move writing of some streams to the second node, and back:
+
+      {:ok, generation} = EventstoreSqlite.Ownership.assign("venue:*", "secondary-node-1")
+      :ok = EventstoreSqlite.Ownership.reclaim(generation)
+
+  When the second node is gone for good while it owns streams, take them back
+  without it with `EventstoreSqlite.Ownership.revoke_node/1`. To end: remove
+  the peer with `remove_peer/2`, then `disable/0`.
+
+  ## Guarantees
+
+    * A stream has one writer: a node that doesn't own a stream gets
+      `{:error, :not_owner}`. The one exception is a forced reclaim during a
+      partition: the old owner keeps writing until it hears of it, and those
+      writes are quarantined, never applied.
+    * Stream versions, event ids, timestamps and data are identical on both
+      nodes. `"$all"` is per node, in the order events arrived there, so a
+      `"$all"` position is only meaningful on the node it came from.
+    * Replication is asynchronous: an append returns once it is committed
+      locally. A partition or restart only delays replication.
+    * An entry that would break the single-writer rule halts replication from
+      that peer instead of being applied (`status/0`, `resume/1`).
+
+  `status/0` and `verify/2` are for operators. The design and its review are
+  in `docs/issues/0008-multi-node-sync-plan.md`; a manual stress test is in
+  `docs/sync-manual-stress-test.md`.
   """
 
   alias Ecto.Adapters.SQL

@@ -3,8 +3,6 @@ defmodule EventstoreSqlite.Sync.Export do
 
   alias Ecto.Adapters.SQL
   alias EventstoreSqlite.RepoRead
-  alias EventstoreSqlite.RepoWrite
-  alias EventstoreSqlite.Sync.Failpoint
   alias EventstoreSqlite.Sync.Log
   alias EventstoreSqlite.Sync.State
 
@@ -25,12 +23,21 @@ defmodule EventstoreSqlite.Sync.Export do
     {:ok, result} = RepoRead.transaction(fn -> read(RepoRead, request) end)
 
     with {:ok, response, previous_ack} <- result do
-      if request.after_seq > previous_ack, do: record_ack(request.from, request.after_seq)
+      if request.after_seq > previous_ack, do: EventstoreSqlite.Sync.Acks.record(request.from, request.after_seq)
       {:ok, response}
     end
   end
 
   def export(%{protocol: protocol}), do: {:error, {:protocol, protocol, @protocol}}
+
+  @doc false
+  def read_only(request) do
+    {:ok, result} = RepoRead.transaction(fn -> read(RepoRead, request) end)
+
+    with {:ok, response, _ack} <- result do
+      {:ok, response}
+    end
+  end
 
   defp read(repo, request) do
     state = State.load(repo)
@@ -68,31 +75,6 @@ defmodule EventstoreSqlite.Sync.Export do
       %{rows: [[seq]]} -> seq
       %{rows: []} -> -1
     end
-  end
-
-  defp record_ack(peer, seq) do
-    RepoWrite.transact(
-      fn repo ->
-        state = State.load(repo)
-
-        if Map.has_key?(state.peers, peer) do
-          SQL.query!(
-            repo,
-            """
-            INSERT INTO sync_acks (peer, seq) VALUES (?1, ?2)
-            ON CONFLICT (peer) DO UPDATE SET seq = max(seq, excluded.seq)
-            """,
-            [peer, seq]
-          )
-
-          Failpoint.hit(:between_ack_and_prune)
-          prune(repo, state)
-        end
-
-        {:ok, :done}
-      end,
-      mode: :immediate
-    )
   end
 
   @doc """

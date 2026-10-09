@@ -1,6 +1,6 @@
 # Plan — multi-node sync with one writer per stream
 
-- **Status:** Plan, revision 7. Approved by both outside reviewers; see [the review log](0008-multi-node-sync-review.md). Design and decisions:
+- **Status:** Implemented 2026-10-09 (see "Implementation notes" at the end). Plan revision 7, approved by both outside reviewers; see [the review log](0008-multi-node-sync-review.md). Design and decisions:
   [0008](0008-multi-node-sync.md). Related: [0009](0009-subscriptions-end-silently.md).
 - **Goal:** two instances of an app, each with its own eventstore_sqlite
   database, both holding every event. Each stream has exactly one node that may
@@ -892,3 +892,55 @@ Pass criteria:
 - Reading or unarchiving archives.
 - Changes in consumers: handling `:not_owner`/`:diverged`, per-node
   checkpoints, and resubscribing after 0009.
+
+## Implementation notes
+
+Where the implementation differs from the plan above:
+
+- **Derived state is one row, not several tables.** `sync_state` holds one
+  `term_to_binary` of `EventstoreSqlite.Sync.State`. That covers identity,
+  peers, halts, divergence, active assignments, releases, revocations and
+  retired nodes. `State.apply/2` is the pure replay function, and
+  `rebuild_state/0` replays `"$sync"` and `"$ownership"` into the same value. The
+  tables `stream_owners`, `sync_revoked`, `sync_retired` and `sync_released`
+  aren't needed. `sync_cursors` also stores the head and diverged flag the peer
+  last reported, which is what the drain check reads.
+- **Peers find each other by node id through `:pg`** (each node's
+  `Sync.Server` joins `{:node, node_id}`), so no `peers:` address
+  configuration is needed (A4). Two nodes claiming the same id are reported as
+  `:ambiguous` and not pulled from.
+- **Ownership events carry the selector string**, and the kind (exact or
+  prefix) follows from it. A `NodeRevoked` log entry carries
+  `[{generation, selector}]`.
+- **`reclaim/2`'s `:timeout`** bounds the wait for the release to be pulled. The
+  release request itself may take up to 5 s more.
+- **`remove_peer/2` for a live peer** requires both directions caught up: the
+  peer acked this node's head, and this node pulled up to the peer's reported
+  head. `discard_unpulled: true` records `discarded_after` only when something
+  of the peer's was actually left unpulled.
+- **`verify/2` returns** `:ok`, `{:lag, [{stream, :local_behind |
+  :remote_behind}]}` (`:prefix` mode only) or `{:error, differences}`.
+- **Cost** (single-event appends on a laptop): sync disabled adds about 18 µs
+  per append (~5%); sync enabled adds about 28%.
+- **Stress harness:** acknowledged writes are polled from writer processes on
+  the nodes every 200 ms, because the test node isn't distributed. Writes
+  acknowledged in the last 200 ms before a node kill are therefore not checked,
+  but they are still covered by the convergence checks.
+- **Supervision.** Replicators run under `Sync.Supervisor` (`rest_for_one`:
+  registry, acknowledgement writer, replicator supervisor, sync server). The
+  sync server also checks every 5 s that a replicator runs for every peer. The
+  stress test found that without this, a replicator crashing three times in five
+  seconds silently ended replication from that peer.
+- **Acknowledgements are asynchronous** (`Sync.Acks`). An export replies first,
+  and a separate process records the newest acknowledgement per peer and
+  prunes. The stress test found that recording it inside the export made a node
+  that was busy importing a large backlog stall its peer's pull.
+- **Capacity observed in the stress test** (two BEAMs on one laptop): about
+  600–1,200 acknowledged single-event writes per second across both nodes,
+  while also importing. After 30-second partitions under that load, the lag
+  reached about 40,000 entries. With only one write connection, saturating the
+  store makes DBConnection drop requests that wait too long in its queue
+  (`DBConnection.ConnectionError`, "connection not available"). That is the
+  normal behaviour of an overloaded pool, not a sync error. Callers that
+  append under sustained overload must handle it.
+

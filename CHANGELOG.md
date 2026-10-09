@@ -57,6 +57,16 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
     unpulled writes to those streams are quarantined; when it reconnects it
     becomes diverged and refuses every write until it is rebuilt from a new
     snapshot under a new node id. Assignments can't overlap.
+  - Replicators are supervised so that they always come back: a replicator
+    that keeps crashing, or a lost replicator supervisor, is restarted, and
+    the sync server checks every 5 seconds that one runs per peer.
+    Acknowledgements are recorded after an export replies, so a node busy
+    importing never stalls its peer's pull.
+  - `mix eventstore.sync_stress` runs a seeded, randomized two-node stress test
+    (partitions, node and replicator kills, handovers, archives, a forced
+    reclaim) and checks that no acknowledged write is lost.
+    `docs/sync-manual-stress-test.md` is the manual counterpart; the dev
+    environment includes a load generator, `EventstoreSqlite.Sync.DevLoad`.
   - Configure the node id with `config :eventstore_sqlite, :sync, node_id: "…"`.
     A store with sync enabled refuses to start under another node id, or
     without one.
