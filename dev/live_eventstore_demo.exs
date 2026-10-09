@@ -20,6 +20,10 @@ defmodule DemoWeb.Router do
   end
 end
 
+defmodule DemoWeb.ErrorHTML do
+  def render(template, _assigns), do: Phoenix.Controller.status_message_from_template(template)
+end
+
 defmodule DemoWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :eventstore_sqlite
 
@@ -37,6 +41,7 @@ Application.put_env(:eventstore_sqlite, DemoWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   http: [ip: {127, 0, 0, 1}, port: port],
   server: true,
+  render_errors: [formats: [html: DemoWeb.ErrorHTML], layout: false],
   secret_key_base: String.duplicate("live_eventstore_demo", 4),
   live_view: [signing_salt: "live_eventstore_demo"]
 )
