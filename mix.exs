@@ -42,6 +42,8 @@ defmodule EventstoreSqlite.MixProject do
       {:stream_data, "~> 1.1", only: [:dev, :test]},
       {:telemetry, "~> 1.0"},
       {:phoenix_live_view, "~> 1.0", optional: true},
+      {:fluxon, "~> 3.0", repo: :fluxon, optional: true},
+      {:tailwind, "~> 0.3", only: :dev, runtime: false},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:bandit, "~> 1.5", only: :dev},
       {:typed_struct, "~> 0.3.0"},
@@ -59,6 +61,7 @@ defmodule EventstoreSqlite.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"],
+      "assets.build": ["tailwind live_eventstore --minify"],
       "eventstore.sync_stress": ["test --only stress test/eventstore_sqlite/sync/stress_test.exs"]
     ]
   end

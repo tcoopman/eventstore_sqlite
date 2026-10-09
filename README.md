@@ -18,8 +18,13 @@ name) and, with sync enabled, this node's role, its peers (state, lag, last
 applied entry, errors), the change log, ownership assignments with each
 stream's owner, and recent sync history. It updates when the store changes,
 through `EventstoreSqlite.subscribe_to_changes/1`, and only uses the public
-API. It needs `phoenix_live_view` in your application; this library only
-depends on it optionally.
+API.
+
+It is built with [Fluxon UI](https://fluxonui.com), so it needs both
+`phoenix_live_view` and `fluxon` in your application; this library depends on
+both optionally, and compiles the dashboard only when both are present. It
+serves its own compiled CSS and JavaScript, so your asset build needs no
+changes.
 
 ```elixir
 # router.ex
@@ -36,6 +41,10 @@ Put it behind authentication: it shows stream names. See
 app: `DB=demo.db mix ecto.create && DB=demo.db mix ecto.migrate && DB=demo.db
 mix run dev/live_eventstore_demo.exs`, then open
 <http://localhost:4000/eventstore>.
+
+After changing the dashboard's markup, rebuild its stylesheet with
+`mix assets.build` and commit `priv/static/live_eventstore.css`: Tailwind only
+generates the classes it finds in the source.
 
 ## Installation
 

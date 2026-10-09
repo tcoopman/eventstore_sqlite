@@ -1,7 +1,12 @@
-if Code.ensure_loaded?(Phoenix.LiveView) do
+if Code.ensure_loaded?(Phoenix.LiveView) and Code.ensure_loaded?(Fluxon) do
   defmodule EventstoreSqlite.LiveEventstore.Layouts do
     @moduledoc false
     use Phoenix.Component
+    use Fluxon, only: [:badge, :button]
+
+    import EventstoreSqlite.LiveEventstore.Helpers, only: [root_path: 1]
+
+    alias EventstoreSqlite.LiveEventstore.Assets
 
     def root(assigns) do
       ~H"""
@@ -12,63 +17,89 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()} />
           <title>{assigns[:page_title] || "live_eventstore"}</title>
-          <style><%= Phoenix.HTML.raw(css()) %></style>
-          <script defer src={@base_path <> "/assets/live_eventstore.js"}>
+          <link rel="stylesheet" href={Assets.path(@base_path, :css)} />
+          <script defer src={Assets.path(@base_path, :js)}>
           </script>
         </head>
-        <body data-live-socket-path={@live_socket_path}>
+        <body data-live-socket-path={@live_socket_path} class="bg-sunken text-foreground min-h-screen text-sm antialiased">
           {@inner_content}
         </body>
       </html>
       """
     end
 
-    defp css do
+    attr :base_path, :string, required: true
+    attr :sync, :map, required: true
+    slot :inner_block, required: true
+
+    def page(assigns) do
+      ~H"""
+      <header class="bg-base border-base flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-6 py-3">
+        <.link navigate={root_path(@base_path)} class="text-foreground text-base font-semibold">
+          live_eventstore
+        </.link>
+        <span class="text-foreground-softer flex items-center gap-2">
+          <%= if @sync.enabled do %>
+            node <span class="text-foreground font-medium">{@sync.node_id}</span>
+            <.badge size="sm" color="info">
+              {if @sync.home?, do: "home", else: "peer of #{@sync.home}"}
+            </.badge>
+            <.badge :if={@sync.diverged} size="sm" color="danger" variant="solid">
+              diverged
+            </.badge>
+          <% else %>
+            single node
+          <% end %>
+        </span>
+        <span class="text-foreground-softest ml-auto flex items-center gap-1.5 text-xs">
+          <span class="bg-success size-1.5 rounded-full"></span> updates live
+        </span>
+      </header>
+      <main class="mx-auto max-w-7xl space-y-8 px-6 py-6">
+        {render_slot(@inner_block)}
+      </main>
       """
-      :root { --bg: #f7f7f8; --panel: #fff; --text: #1d1d22; --muted: #6b6b76; --line: #e3e3e8;
-              --accent: #4f46e5; --accent-soft: #eef0ff; --warn: #b45309; --bad: #b91c1c; }
-      @media (prefers-color-scheme: dark) {
-        :root { --bg: #131316; --panel: #1c1c21; --text: #ececf1; --muted: #9b9ba8; --line: #2e2e36;
-                --accent: #8b85ff; --accent-soft: #26244a; --warn: #f59e0b; --bad: #f87171; }
-      }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: var(--bg); color: var(--text);
-             font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-      header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-               padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
-      header h1 { margin: 0; font-size: 17px; }
-      header .node { color: var(--muted); }
-      header .right { margin-left: auto; display: flex; gap: 8px; align-items: center; color: var(--muted); }
-      main { padding: 20px 24px; max-width: 1280px; }
-      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-      .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-      .card .value { font-size: 22px; font-variant-numeric: tabular-nums; margin-top: 2px; }
-      .card .sub { color: var(--muted); font-size: 12px; }
-      .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
-               background: var(--accent-soft); color: var(--accent); }
-      .badge.bad { background: transparent; border: 1px solid var(--bad); color: var(--bad); }
-      .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-      .toolbar input[type=search] { flex: 1 1 280px; padding: 7px 10px; border: 1px solid var(--line);
-               border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
-      table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line);
-              border-radius: 8px; overflow: hidden; }
-      th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-      th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
-      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 24px 0 8px; }
-      section + h2, h2:first-child { margin-top: 0; }
-      td.problem { color: var(--bad); font-size: 12px; word-break: break-word; }
-      td.fields { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-                  word-break: break-word; }
-      td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-      td.name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
-      td.time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-      tr.system td.name { color: var(--muted); }
-      tbody tr:last-child td { border-bottom: 0; }
-      .empty { padding: 32px; text-align: center; color: var(--muted); }
-      .pager { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin-top: 12px; color: var(--muted); }
-      .pager a { color: var(--accent); text-decoration: none; }
-      .pager .disabled { opacity: .4; }
+    end
+
+    attr :label, :string, required: true
+    attr :id, :string, default: nil
+    slot :inner_block, required: true
+    slot :sub
+
+    def card(assigns) do
+      ~H"""
+      <div class="surface rounded-base p-4">
+        <div class="text-foreground-softer text-xs font-medium uppercase tracking-wide">{@label}</div>
+        <div id={@id} class="mt-1 text-xl font-semibold tabular-nums">{render_slot(@inner_block)}</div>
+        <div :if={@sub != []} class="text-foreground-softer mt-0.5 text-xs">{render_slot(@sub)}</div>
+      </div>
+      """
+    end
+
+    attr :patch, :any, default: nil, doc: "where it leads; `nil` or `false` disables it"
+    slot :inner_block, required: true
+
+    def pager_button(%{patch: patch} = assigns) when patch in [nil, false] do
+      ~H"""
+      <.button size="sm" variant="outline" disabled class="opacity-50">{render_slot(@inner_block)}</.button>
+      """
+    end
+
+    def pager_button(assigns) do
+      ~H"""
+      <.button size="sm" variant="outline" patch={@patch}>{render_slot(@inner_block)}</.button>
+      """
+    end
+
+    attr :title, :string, required: true
+    slot :inner_block
+
+    def section_title(assigns) do
+      ~H"""
+      <div class="mb-3 flex items-center justify-between gap-4">
+        <h2 class="text-foreground-softer text-xs font-semibold uppercase tracking-wide">{@title}</h2>
+        {render_slot(@inner_block)}
+      </div>
       """
     end
   end

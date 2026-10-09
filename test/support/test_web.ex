@@ -29,6 +29,7 @@ defmodule EventstoreSqlite.TestWeb.Endpoint do
 
   socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
 
+  plug(Plug.Parsers, parsers: [:urlencoded], pass: ["*/*"])
   plug(Plug.Session, @session_options)
   plug(EventstoreSqlite.TestWeb.Router)
 end

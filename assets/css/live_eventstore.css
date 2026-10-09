@@ -1,0 +1,8 @@
+@import "tailwindcss" source(none);
+@source "../../lib/eventstore_sqlite/live_eventstore";
+@source "../../deps/fluxon/lib/components/{badge,button,checkbox,input,sheet,table}.ex";
+@import "../../deps/fluxon/priv/static/theme";
+
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+
+[data-phx-session], [data-phx-teleported-src] { display: contents }

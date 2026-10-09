@@ -44,7 +44,8 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
       html = conn |> get("/eventstore") |> html_response(200)
       assert html =~ "orders:1"
       assert html =~ "single node"
-      assert html =~ ~s(src="/eventstore/assets/live_eventstore.js")
+      assert html =~ ~r|src="/eventstore/assets/live_eventstore.js\?v=[0-9a-f]{12}"|
+      assert html =~ ~r|href="/eventstore/assets/live_eventstore.css\?v=[0-9a-f]{12}"|
       assert html =~ ~s(data-live-socket-path="/live")
 
       {:ok, view, _html} = live(conn, "/eventstore")
@@ -114,7 +115,13 @@ defmodule EventstoreSqlite.LiveEventstoreTest do
     test "works mounted in a nested scope", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/admin/store")
       assert html =~ "orders:1"
-      assert conn |> get("/admin/store") |> html_response(200) =~ ~s(src="/admin/store/assets/live_eventstore.js")
+      assert conn |> get("/admin/store") |> html_response(200) =~ ~r{src="/admin/store/assets/live_eventstore.js\?v=}
+    end
+
+    test "serves the compiled stylesheet", %{conn: conn} do
+      conn = get(conn, "/eventstore/assets/live_eventstore.css")
+      assert response_content_type(conn, :css) =~ "text/css"
+      assert conn.resp_body =~ "--background-base"
     end
 
     test "serves the JavaScript through a pipeline with CSRF protection", %{conn: conn} do

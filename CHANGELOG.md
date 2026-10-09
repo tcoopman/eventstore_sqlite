@@ -48,21 +48,27 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
     `"$ownership"` events.
 
   It updates through `subscribe_to_changes/1`, with a refresh every 30 s for
-  writes it isn't told about, and only uses the public API. It serves its own
-  JavaScript, built from the application's `phoenix` and
-  `phoenix_live_view` packages, so it needs no asset build. Options:
+  writes it isn't told about, and only uses the public API. It is built with
+  Fluxon UI and serves its own stylesheet (compiled with Tailwind into
+  `priv/static`) and JavaScript (the application's `phoenix`,
+  `phoenix_live_view` and `fluxon` packages), so it needs no asset build.
+  Asset URLs carry a content digest, so browsers pick up a new version at
+  once. Options:
   `:on_mount` (for authentication), `:live_socket_path`,
   `:live_session_name`. Put it behind authentication.
   `dev/live_eventstore_demo.exs` serves it on a demo store.
 
 ### Changed
 
-- `phoenix_live_view` is an optional dependency. Applications without it are
-  unaffected: the dashboard modules are only compiled when it is present.
+- `phoenix_live_view` and `fluxon` (from the Fluxon hex repository) are
+  optional dependencies. Applications without them are unaffected: the
+  dashboard modules are only compiled when both are present. Building this
+  repository itself now needs access to the Fluxon repository.
 - Development dependencies: `mneme` is pinned to 0.9.3, which lets dev and
   test use current LiveView (it conflicted through `igniter`). That also
   removed `mint` and `hpax` from the lock file. `bandit` was added for the demo
-  server.
+  server, and `tailwind` for `mix assets.build`, which compiles the
+  dashboard's stylesheet.
 
 ## [2026-10-09]
 
