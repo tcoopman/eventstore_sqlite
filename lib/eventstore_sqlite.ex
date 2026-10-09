@@ -76,21 +76,16 @@ defmodule EventstoreSqlite do
   """
   import Ecto.Query, only: [from: 2]
 
-  alias Ecto.Adapters.SQL
   alias EventstoreSqlite.Event
   alias EventstoreSqlite.Reader
-  alias EventstoreSqlite.SystemEvents.StreamArchived
+  alias EventstoreSqlite.Store
+  alias EventstoreSqlite.Sync
 
   @all_stream_id "$all"
   @archives_stream_id "$archives"
-  @system_streams [@all_stream_id, @archives_stream_id]
+  @system_streams [@all_stream_id, @archives_stream_id, "$sync", "$ownership"]
   @default_count 10_000
   @default_chunk_size 1_000
-
-  # Max events per INSERT statement. Each event binds 5 parameters, so this keeps
-  # us comfortably under SQLite's bound-parameter limit (SQLITE_MAX_VARIABLE_NUMBER)
-  # for arbitrarily large appends.
-  @insert_chunk_size 1_000
 
   @doc """
   Returns a lazy stream of recorded events, oldest first.
@@ -216,21 +211,23 @@ defmodule EventstoreSqlite do
 
     case EventstoreSqlite.RepoWrite.transact(
            fn repo ->
-             with :ok <- validate_version(repo, stream_id, expected_version),
-                  :ok <- insert_events(repo, events),
-                  {:ok, written} <- insert_in_stream(repo, stream_id, Enum.map(events, &{&1.id, nil})),
-                  {:ok, _} <- insert_in_stream(repo, @all_stream_id, written) do
-               {:ok, :done}
+             with {:ok, sync} <- Sync.Write.authorize(repo, stream_id),
+                  :ok <- Store.validate_version(repo, stream_id, expected_version),
+                  :ok <- Store.insert_events(repo, events) do
+               event_ids = Enum.map(events, & &1.id)
+               {:ok, first_version} = Store.append_to_stream_and_all(repo, stream_id, event_ids)
+               :ok = Sync.Write.log_append(repo, sync, stream_id, first_version, event_ids)
+               {:ok, sync}
              end
            end,
            mode: :immediate
          ) do
-      {:ok, _} ->
+      {:ok, sync} ->
         :ok = EventstoreSqlite.Subscriptions.ping(stream_id)
-        :ok
+        Sync.Write.notify(sync)
 
-      {:error, :wrong_expected_version} ->
-        {:error, :wrong_expected_version}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -286,9 +283,23 @@ defmodule EventstoreSqlite do
   def archive_stream(stream_id, _) when stream_id in @system_streams, do: {:error, :system_stream}
 
   def archive_stream(stream_id, expected_version) when is_binary(stream_id) do
-    EventstoreSqlite.Subscriptions.archive_stream(stream_id, fn ->
-      EventstoreSqlite.RepoWrite.transact(&archive_in_transaction(&1, stream_id, expected_version), mode: :immediate)
-    end)
+    archive = fn ->
+      EventstoreSqlite.RepoWrite.transact(
+        fn repo ->
+          with {:ok, sync} <- Sync.Write.authorize(repo, stream_id),
+               {:ok, event_count} <- Store.archive_in_transaction(repo, stream_id, expected_version) do
+            :ok = Sync.Write.log_archive(repo, sync, stream_id, event_count)
+            {:ok, sync}
+          end
+        end,
+        mode: :immediate
+      )
+    end
+
+    case EventstoreSqlite.Subscriptions.archive_stream(stream_id, archive) do
+      {:ok, sync} -> Sync.Write.notify(sync)
+      error -> error
+    end
   end
 
   @doc """
@@ -358,45 +369,6 @@ defmodule EventstoreSqlite do
     EventstoreSqlite.RepoRead.all(query)
   end
 
-  defp validate_version(_repo, _stream_id, :any_version), do: :ok
-
-  defp validate_version(repo, stream_id, expected_version)
-       when expected_version == :no_stream or expected_version == {:version, 0} do
-    if repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
-      {:error, :wrong_expected_version}
-    else
-      :ok
-    end
-  end
-
-  defp validate_version(repo, stream_id, :stream_exists) do
-    if repo.exists?(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
-      :ok
-    else
-      {:error, :wrong_expected_version}
-    end
-  end
-
-  defp validate_version(repo, stream_id, {:version, version}) do
-    if repo.exists?(
-         from(stream in EventstoreSqlite.Stream,
-           where: stream.stream_id == ^stream_id and stream.stream_version == ^version
-         )
-       ) do
-      :ok
-    else
-      {:error, :wrong_expected_version}
-    end
-  end
-
-  defp insert_events(repo, events) do
-    events
-    |> Enum.chunk_every(@insert_chunk_size)
-    |> Enum.each(fn chunk ->
-      repo.insert_all(Event, Enum.map(chunk, &Map.drop(&1, [:__struct__, :__meta__])))
-    end)
-  end
-
   defp with_start_versions(stream_id) when is_binary(stream_id), do: [{stream_id, 0}]
 
   defp with_start_versions({stream_id, start_version}) when is_binary(stream_id), do: [{stream_id, start_version}]
@@ -416,155 +388,5 @@ defmodule EventstoreSqlite do
       value when is_integer(value) and value > 0 -> value
       value -> raise ArgumentError, "expected #{inspect(key)} to be a positive integer, got: #{inspect(value)}"
     end
-  end
-
-  defp insert_in_stream(repo, stream_id, entries) do
-    stream =
-      repo.one(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) ||
-        %EventstoreSqlite.Stream{stream_id: stream_id, stream_version: 0}
-
-    stream_changeset =
-      case stream.id do
-        nil ->
-          Ecto.Changeset.change(stream, stream_version: Enum.count(entries))
-
-        _ ->
-          Ecto.Changeset.change(stream, stream_version: stream.stream_version + Enum.count(entries))
-      end
-
-    repo.insert_or_update!(stream_changeset)
-
-    rows =
-      entries
-      |> Enum.with_index(stream.stream_version)
-      |> Enum.map(fn {{event_id, origin}, version} -> {event_id, version, origin || {stream_id, version}} end)
-
-    rows
-    |> Enum.chunk_every(@insert_chunk_size)
-    |> Enum.each(fn chunk ->
-      placeholders = Enum.map_join(chunk, ",", fn _ -> "(?, ?, ?, ?, ?)" end)
-
-      params =
-        Enum.flat_map(chunk, fn {event_id, version, {original_stream_id, original_stream_version}} ->
-          [event_id, stream_id, version, original_stream_id, original_stream_version]
-        end)
-
-      query = ~s"""
-      INSERT INTO stream_events (
-        event_id, stream_id, stream_version, original_stream_id, original_stream_version
-      )
-      VALUES #{placeholders}
-      """
-
-      SQL.query!(repo, query, params)
-    end)
-
-    {:ok, Enum.map(rows, fn {event_id, version, _origin} -> {event_id, {stream_id, version}} end)}
-  end
-
-  defp archive_in_transaction(repo, stream_id, expected_version) do
-    with {:ok, stream} <- fetch_stream(repo, stream_id),
-         :ok <- validate_version(repo, stream_id, expected_version) do
-      check_archivable!(repo, stream)
-      archive_id = insert_archived_stream(repo, stream_id)
-      copy_to_archive!(repo, archive_id, stream)
-      delete_stream(repo, stream_id)
-
-      append_system_event(repo, @archives_stream_id, %StreamArchived{
-        stream_id: stream_id,
-        archive_id: archive_id,
-        event_count: stream.stream_version
-      })
-
-      {:ok, :archived}
-    end
-  end
-
-  defp fetch_stream(repo, stream_id) do
-    case repo.one(from(stream in EventstoreSqlite.Stream, where: stream.stream_id == ^stream_id)) do
-      nil -> {:error, :stream_not_found}
-      stream -> {:ok, stream}
-    end
-  end
-
-  defp check_archivable!(repo, stream) do
-    %{rows: [[stream_rows, all_rows]]} =
-      SQL.query!(
-        repo,
-        """
-        SELECT (SELECT count(*) FROM stream_events WHERE stream_id = ?1),
-               (SELECT count(*) FROM stream_events WHERE stream_id = ?2 AND original_stream_id = ?1)
-        """,
-        [stream.stream_id, @all_stream_id]
-      )
-
-    if stream_rows != stream.stream_version or all_rows != stream.stream_version do
-      raise """
-      cannot archive #{inspect(stream.stream_id)}: its version is \
-      #{stream.stream_version}, but it has #{stream_rows} rows and #{all_rows} \
-      rows in $all. Every event must be in its stream and in $all exactly once. \
-      Nothing was archived.
-      """
-    end
-  end
-
-  defp insert_archived_stream(repo, stream_id) do
-    %{rows: [[archive_id]]} =
-      SQL.query!(
-        repo,
-        """
-        INSERT INTO archived_streams (stream_id, stream_version, created_at, archived_at)
-        SELECT stream_id, stream_version, inserted_at, strftime('%Y-%m-%dT%H:%M:%S', 'now')
-        FROM streams
-        WHERE stream_id = ?1
-        RETURNING id
-        """,
-        [stream_id]
-      )
-
-    archive_id
-  end
-
-  defp copy_to_archive!(repo, archive_id, stream) do
-    %{num_rows: copied} =
-      SQL.query!(
-        repo,
-        """
-        INSERT INTO archived_stream_events (archive_id, event_id, stream_version, all_position)
-        SELECT ?1, s.event_id, s.stream_version, a.stream_version
-        FROM stream_events s
-        JOIN stream_events a
-          ON a.stream_id = ?3
-         AND a.original_stream_id = s.stream_id
-         AND a.original_stream_version = s.stream_version
-         AND a.event_id = s.event_id
-        WHERE s.stream_id = ?2
-        """,
-        [archive_id, stream.stream_id, @all_stream_id]
-      )
-
-    if copied != stream.stream_version do
-      raise """
-      cannot archive #{inspect(stream.stream_id)}: only #{copied} of its \
-      #{stream.stream_version} events have a matching $all row. Nothing was \
-      archived.
-      """
-    end
-  end
-
-  defp delete_stream(repo, stream_id) do
-    SQL.query!(repo, "DELETE FROM stream_events WHERE stream_id = ?2 AND original_stream_id = ?1", [
-      stream_id,
-      @all_stream_id
-    ])
-
-    SQL.query!(repo, "DELETE FROM stream_events WHERE stream_id = ?1", [stream_id])
-    SQL.query!(repo, "DELETE FROM streams WHERE stream_id = ?1", [stream_id])
-  end
-
-  defp append_system_event(repo, stream_id, data) do
-    event = Event.new(data)
-    :ok = insert_events(repo, [event])
-    {:ok, _} = insert_in_stream(repo, stream_id, [{event.id, nil}])
   end
 end

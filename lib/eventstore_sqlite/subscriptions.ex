@@ -56,9 +56,9 @@ defmodule EventstoreSqlite.Subscriptions do
 
   def handle_call({:archive_stream, stream, archive}, _from, state) do
     case run_archive(archive) do
-      {:ok, _} ->
+      {:ok, result} ->
         state = state |> end_subscriptions(stream) |> update_streams_to_handle("$archives")
-        {:reply, :ok, state, {:continue, :handle_stream}}
+        {:reply, {:ok, result}, state, {:continue, :handle_stream}}
 
       error ->
         {:reply, error, state}

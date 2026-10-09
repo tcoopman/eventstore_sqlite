@@ -41,8 +41,9 @@ defmodule EventstoreSqlite.DataCase do
   Truncates all tables so each test starts from an empty schema.
 
   Deletes the child tables (the archive tables, `stream_events`) before their
-  parents to stay foreign-key safe. The archive tables are skipped while a
-  migration test has rolled them back. The `events` table's BEFORE-DELETE guard is dropped only for
+  parents to stay foreign-key safe. The archive and sync tables are skipped
+  while a migration test has rolled them back. The sync log's seq counter is
+  reset, so seqs and generations start at 1 in every test. The `events` table's BEFORE-DELETE guard is dropped only for
   the duration of its truncation and then reinstalled from its own definition (as
   stored in `sqlite_master`), so it stays in force for every test body without
   the reset hardcoding any trigger SQL.
@@ -50,10 +51,25 @@ defmodule EventstoreSqlite.DataCase do
   def reset! do
     repo = EventstoreSqlite.RepoWrite
 
-    Enum.each(["archived_stream_events", "archived_streams"], &delete_if_exists(repo, &1))
+    Enum.each(
+      [
+        "archived_stream_events",
+        "archived_streams",
+        "sync_log_events",
+        "sync_log",
+        "sync_cursors",
+        "sync_acks",
+        "sync_quarantine",
+        "sync_state"
+      ],
+      &delete_if_exists(repo, &1)
+    )
+
+    SQL.query!(repo, "DELETE FROM sqlite_sequence WHERE name = 'sync_log'", [])
     SQL.query!(repo, "DELETE FROM stream_events", [])
     truncate_events(repo)
     SQL.query!(repo, "DELETE FROM streams", [])
+    EventstoreSqlite.Sync.Server.refresh()
 
     :ok
   end

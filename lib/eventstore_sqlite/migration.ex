@@ -75,6 +75,52 @@ defmodule EventstoreSqlite.Migration do
   end
 
   @doc """
+  Raises when a user stream named `stream_id` already exists, because
+  eventstore_sqlite reserves that name.
+  """
+  def check_stream_name_free!(repo, stream_id) do
+    %{rows: [[streams, events]]} =
+      SQL.query!(
+        repo,
+        """
+        SELECT (SELECT count(*) FROM streams WHERE stream_id = ?1),
+               (SELECT count(*) FROM stream_events WHERE stream_id = ?1)
+        """,
+        [stream_id]
+      )
+
+    if streams + events > 0 do
+      raise """
+      A stream named "#{stream_id}" already exists (#{events} events). \
+      eventstore_sqlite now reserves this name. Copy its events to a stream \
+      with another name and remove it, then run the migration again.
+      """
+    end
+
+    :ok
+  end
+
+  @doc """
+  Raises when sync has ever been enabled, because dropping the sync tables
+  would lose the log of entries peers haven't pulled yet, and the store's
+  `"$sync"` and `"$ownership"` events would be read as ordinary streams.
+  """
+  def check_no_sync_history!(repo) do
+    case SQL.query!(repo, "SELECT count(*) FROM streams WHERE stream_id IN ('$sync', '$ownership')") do
+      %{rows: [[0]]} ->
+        :ok
+
+      _ ->
+        raise """
+        Refusing to drop the sync tables: sync has been enabled on this store, so \
+        it holds "$sync" and "$ownership" events and possibly log entries a \
+        peer hasn't pulled. Rolling back past this migration isn't supported \
+        once sync has been used.
+        """
+    end
+  end
+
+  @doc """
   Raises when any stream has been archived, because dropping the archive tables
   would lose which stream and versions the archived events belonged to.
   """

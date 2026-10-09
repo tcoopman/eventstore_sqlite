@@ -38,6 +38,7 @@ defmodule EventstoreSqlite.MixProject do
       {:ecto_sqlite3, ">= 0.0.0"},
       {:jason, "~> 1.4"},
       {:mneme, ">= 0.0.0", only: [:dev, :test]},
+      {:stream_data, "~> 1.1", only: [:dev, :test]},
       {:typed_struct, "~> 0.3.0"},
       {:uniq, "~> 0.1"},
       {:benchee, ">= 0.0.0", only: [:bench]},

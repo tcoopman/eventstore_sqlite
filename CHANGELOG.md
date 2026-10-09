@@ -5,6 +5,44 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 `YYYY-MM-DD`). The categories follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2026-10-09]
+
+### Breaking
+
+- **The names `"$sync"` and `"$ownership"` are now reserved.** The new
+  migration refuses to run on a store that already has a stream with either
+  name. This must return `0`:
+
+  ```sql
+  SELECT count(*) FROM streams WHERE stream_id IN ('$sync', '$ownership');
+  ```
+
+- `append_to_stream/3` and `archive_stream/2` can return
+  `{:error, :not_owner}` and `{:error, :diverged}`, but only once sync has been
+  enabled with `EventstoreSqlite.Sync.enable/1`. A store without sync behaves
+  as before.
+
+### Added
+
+- Sync between two stores with one writer per stream
+  (`EventstoreSqlite.Sync`). See `docs/issues/0008-multi-node-sync-plan.md`.
+  - A store can be made the home node of a replication group with
+    `EventstoreSqlite.Sync.enable/1`. From then on every append and archive is
+    recorded in a change log in the same transaction, and every write is
+    checked against stream ownership. By default the home node owns every
+    stream. The log stays empty while sync is disabled.
+  - Sync state is kept as system events in `"$sync"` and `"$ownership"`. Like
+    `"$archives"`, neither appears in `"$all"`.
+  - Configure the node id with `config :eventstore_sqlite, :sync, node_id: "…"`.
+    A store with sync enabled refuses to start under another node id, or
+    without one.
+
+### Changed
+
+- An append reads the sync state in its transaction. With sync disabled this
+  costs about 18 µs per append (about 5% of a single-event append). With sync
+  enabled, writing the log adds about 28%.
+
 ## [2026-10-02]
 
 ### Breaking
