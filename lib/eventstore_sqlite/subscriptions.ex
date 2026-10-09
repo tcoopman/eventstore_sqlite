@@ -5,6 +5,7 @@ defmodule EventstoreSqlite.Subscriptions do
   import Ecto.Query, only: [from: 2]
 
   # Client
+  alias EventstoreSqlite.Sync.Failpoint
 
   def start_link(_) do
     GenServer.start_link(__MODULE__, nil, name: __MODULE__)
@@ -27,10 +28,32 @@ defmodule EventstoreSqlite.Subscriptions do
     end
   end
 
+  @doc """
+  Runs an imported archive entry. `apply` opens its own transaction and returns
+  `{:ok, :applied | :duplicate | :quarantined}` or an error. Only `:applied`
+  ends the stream's subscriptions.
+  """
+  def apply_archive(stream, apply) do
+    case GenServer.call(__MODULE__, {:apply_archive, stream, apply}, :infinity) do
+      {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
+      result -> result
+    end
+  end
+
+  @doc """
+  Checks every subscribed stream for events that weren't delivered, as the
+  periodic reconciliation does.
+  """
+  def ping_all do
+    GenServer.cast(__MODULE__, :ping_all)
+  end
+
   # Server (callbacks)
 
   @impl true
   def init(_) do
+    schedule_reconcile()
+
     {:ok,
      %{
        subscribed_streams: %{},
@@ -57,11 +80,24 @@ defmodule EventstoreSqlite.Subscriptions do
   def handle_call({:archive_stream, stream, archive}, _from, state) do
     case run_archive(archive) do
       {:ok, result} ->
+        Failpoint.hit(:archive_after_commit)
         state = state |> end_subscriptions(stream) |> update_streams_to_handle("$archives")
         {:reply, {:ok, result}, state, {:continue, :handle_stream}}
 
       error ->
         {:reply, error, state}
+    end
+  end
+
+  def handle_call({:apply_archive, stream, apply}, _from, state) do
+    case run_archive(apply) do
+      {:ok, :applied} ->
+        Failpoint.hit(:archive_after_commit)
+        state = state |> end_subscriptions(stream) |> update_streams_to_handle("$archives")
+        {:reply, {:ok, :applied}, state, {:continue, :handle_stream}}
+
+      result ->
+        {:reply, result, state}
     end
   end
 
@@ -71,9 +107,20 @@ defmodule EventstoreSqlite.Subscriptions do
     {:noreply, state, {:continue, :handle_stream}}
   end
 
+  def handle_cast(:ping_all, state) do
+    state = Enum.reduce(Map.keys(state.subscribers), state, &update_streams_to_handle(&2, &1))
+    {:noreply, state, {:continue, :handle_stream}}
+  end
+
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     {:noreply, remove_subscriber(state, pid)}
+  end
+
+  def handle_info(:reconcile, state) do
+    schedule_reconcile()
+    state = Enum.reduce(streams_behind(state.subscribed_streams), state, &update_streams_to_handle(&2, &1))
+    {:noreply, state, {:continue, :handle_stream}}
   end
 
   @impl true
@@ -88,6 +135,29 @@ defmodule EventstoreSqlite.Subscriptions do
       :empty ->
         {:noreply, state}
     end
+  end
+
+  defp schedule_reconcile do
+    Process.send_after(
+      self(),
+      :reconcile,
+      Application.get_env(:eventstore_sqlite, :subscription_reconcile_interval, 1_000)
+    )
+  end
+
+  defp streams_behind(subscribed_streams) when map_size(subscribed_streams) == 0, do: []
+
+  defp streams_behind(subscribed_streams) do
+    subscribed_streams
+    |> Map.keys()
+    |> Enum.chunk_every(500)
+    |> Enum.flat_map(fn streams ->
+      EventstoreSqlite.RepoRead.all(
+        from(s in "streams", where: s.stream_id in ^streams, select: {s.stream_id, s.stream_version})
+      )
+    end)
+    |> Enum.filter(fn {stream, version} -> version > Map.fetch!(subscribed_streams, stream) end)
+    |> Enum.map(&elem(&1, 0))
   end
 
   # `streams.stream_version` is the number of events in the stream, which is the

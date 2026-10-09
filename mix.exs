@@ -39,6 +39,7 @@ defmodule EventstoreSqlite.MixProject do
       {:jason, "~> 1.4"},
       {:mneme, ">= 0.0.0", only: [:dev, :test]},
       {:stream_data, "~> 1.1", only: [:dev, :test]},
+      {:telemetry, "~> 1.0"},
       {:typed_struct, "~> 0.3.0"},
       {:uniq, "~> 0.1"},
       {:benchee, ">= 0.0.0", only: [:bench]},

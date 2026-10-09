@@ -9,6 +9,8 @@ config :eventstore_sqlite, EventstoreSqlite.RepoRead, database: Path.expand("../
 # Run `mix help test` for more information.
 config :eventstore_sqlite, EventstoreSqlite.RepoWrite, database: Path.expand("../test.db", Path.dirname(__ENV__.file))
 config :eventstore_sqlite, :sync, node_id: "test-node"
+config :eventstore_sqlite, failpoints: true
+config :eventstore_sqlite, subscription_reconcile_interval: 200
 
 # Print only warnings and errors during test
 config :logger, level: :warning

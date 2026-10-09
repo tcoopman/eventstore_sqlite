@@ -33,9 +33,25 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
     stream. The log stays empty while sync is disabled.
   - Sync state is kept as system events in `"$sync"` and `"$ownership"`. Like
     `"$archives"`, neither appears in `"$all"`.
+  - A node pulls the entries of its peer with `EventstoreSqlite.Sync.export/1`
+    and applies them unchanged: the same event ids, timestamps and bytes.
+    Subscribers receive imported events like local ones. An entry that would
+    break the single-writer rule halts replication from that peer
+    (`EventstoreSqlite.Sync.resume/1` clears the halt after a repair).
+    Entries written under a revoked ownership generation are quarantined
+    (`EventstoreSqlite.Sync.quarantine/0`).
   - Configure the node id with `config :eventstore_sqlite, :sync, node_id: "…"`.
     A store with sync enabled refuses to start under another node id, or
     without one.
+
+### Fixed
+
+- Subscribers of a stream could miss events for good when the process that
+  appended them died between the commit and notifying the subscription
+  process, if nothing was appended to that stream afterwards. The subscription
+  process now also checks every subscribed stream for undelivered events once
+  a second. Set `config :eventstore_sqlite, subscription_reconcile_interval: ms`
+  to change the interval.
 
 ### Changed
 

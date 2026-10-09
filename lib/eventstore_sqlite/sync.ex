@@ -21,11 +21,16 @@ defmodule EventstoreSqlite.Sync do
   """
 
   alias Ecto.Adapters.SQL
+  alias EventstoreSqlite.RepoRead
   alias EventstoreSqlite.RepoWrite
   alias EventstoreSqlite.Sync.Log
   alias EventstoreSqlite.Sync.State
   alias EventstoreSqlite.SystemEvents.SyncDisabled
   alias EventstoreSqlite.SystemEvents.SyncEnabled
+  alias EventstoreSqlite.SystemEvents.SyncHalted
+  alias EventstoreSqlite.SystemEvents.SyncResumed
+
+  require Logger
 
   @doc """
   Enables sync on this store and makes it the home node of a new replication
@@ -82,6 +87,56 @@ defmodule EventstoreSqlite.Sync do
             :ok = Log.delete_all(repo)
             {:ok, state}
         end
+      end
+    end)
+  end
+
+  @doc """
+  Clears a halt of replication from `peer`, after the cause has been repaired,
+  so replication resumes. A halt is recorded when an entry from the peer can't
+  be applied, for example a version conflict or an ownership violation.
+
+  Divergence can't be cleared: a diverged node returns `{:error, :diverged}`.
+  Returns `{:error, :not_halted}` when replication from `peer` isn't halted.
+  """
+  def resume(peer) when is_binary(peer) do
+    transact_state(fn repo, state ->
+      cond do
+        state.diverged -> {:error, :diverged}
+        not Map.has_key?(state.halted, peer) -> {:error, :not_halted}
+        true -> {:ok, State.record(repo, state, %SyncResumed{peer: peer})}
+      end
+    end)
+  end
+
+  @doc """
+  The entries that were quarantined instead of applied, oldest first. An entry
+  is quarantined when it was written under an ownership generation that was
+  revoked by `EventstoreSqlite.Ownership.revoke_node/1` before this node
+  imported it.
+  """
+  def quarantine do
+    %{rows: rows} =
+      SQL.query!(RepoRead, "SELECT origin, seq, reason, inserted_at, entry FROM sync_quarantine ORDER BY id")
+
+    Enum.map(rows, fn [origin, seq, reason, inserted_at, entry] ->
+      %{origin: origin, seq: seq, reason: reason, quarantined_at: inserted_at, entry: :erlang.binary_to_term(entry)}
+    end)
+  end
+
+  @doc false
+  defdelegate export(request), to: EventstoreSqlite.Sync.Export
+
+  @doc false
+  def halt(peer, reason) do
+    Logger.error("eventstore_sqlite sync: replication from #{peer} halted: #{inspect(reason)}")
+    :telemetry.execute([:eventstore_sqlite, :sync, :halt], %{}, %{peer: peer, reason: reason})
+
+    transact_state(fn repo, state ->
+      if Map.get(state.halted, peer) == reason or state.diverged do
+        {:ok, state}
+      else
+        {:ok, State.record(repo, state, %SyncHalted{peer: peer, reason: reason})}
       end
     end)
   end
