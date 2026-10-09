@@ -1,6 +1,12 @@
 # Issue — subscribers aren't told when their subscription ends
 
-- **Status:** Open. Not reproduced by a test yet.
+- **Status:** Version 1 done 2026-10-09: subscribers monitor
+  `EventstoreSqlite.Subscriptions` themselves, following the pattern documented
+  in `EventstoreSqlite.subscribe_to_stream/5` ("When the subscription process
+  stops"). There is no API change. `test/eventstore_sqlite/subscription_restart_test.exs`
+  kills the subscription process: a subscriber written that way misses nothing,
+  and one that doesn't monitor misses everything after the restart. Version 2
+  (below) stays open.
 - **Found via:** 0008 (multi-node sync), whose first list of gaps said "remote
   subscriptions are dropped silently when the link breaks".
 
@@ -71,3 +77,21 @@ default because a forgotten monitor fails silently, which is the bug itself.
 - An upcaster that raises on one event crashes `Subscriptions` and silently ends
   subscriptions to unrelated streams.
 - Subscribing a pid on another `:peer` node is accepted today.
+
+## Decision (2026-10-09)
+
+Version 1 is documentation only: the subscriber is responsible for monitoring
+`EventstoreSqlite.Subscriptions` and resubscribing from its own position. This
+needs no breaking change, and it works when one process subscribes another,
+as long as the subscriber itself monitors. The cost is that a subscriber that
+doesn't follow the pattern still fails silently.
+
+Still open, for a version 2 if that turns out to happen in practice:
+
+- `subscribe_to_stream` returning `{:ok, ref}` (breaking). Callers that
+  subscribe another process would have to pass the ref on; that is allowed,
+  not refused.
+- Rejecting subscriber pids on other nodes.
+- Isolating read failures per stream, so one bad event doesn't restart the
+  subscription process for everyone.
+

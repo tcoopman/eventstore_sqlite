@@ -73,6 +73,16 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 
 ### Fixed
 
+- **Documented how subscribers survive a restart of the subscription
+  process.** When `EventstoreSqlite.Subscriptions` crashes, for example on an
+  upcaster that raises, its supervisor restarts it without any subscriptions,
+  and subscribers aren't told. A subscriber that doesn't watch for this
+  silently stops receiving events. This was always the case. Every subscriber
+  must now monitor `EventstoreSqlite.Subscriptions` and resubscribe from its
+  own position; `EventstoreSqlite.subscribe_to_stream/5` documents the pattern
+  under "When the subscription process stops". **Check your subscribers**
+  (projections, LiveViews) against it.
+
 - **Subscribers could miss events for good.** This happened when the process
   that appended them died between the commit and notifying the subscription
   process, and nothing was appended to that stream afterwards. See the

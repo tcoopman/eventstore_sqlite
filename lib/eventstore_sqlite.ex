@@ -330,6 +330,7 @@ defmodule EventstoreSqlite do
   subscriber is not sent this message; archived events simply disappear from
   future reads, leaving position gaps. Subscribe to `"$archives"` to receive
   archive notifications.
+
   Events are pushed when an append or import notifies the subscription
   process. As a safety net for a notification that never came (the appending
   process died right after its commit), the subscription process also checks
@@ -343,6 +344,66 @@ defmodule EventstoreSqlite do
   transactions run through the subscription process to keep cursor changes
   ordered; a large archive can temporarily delay delivery processing for other
   subscriptions.
+
+  ## When the subscription process stops
+
+  Every subscription is held by one process, `EventstoreSqlite.Subscriptions`.
+  If it crashes (for example because an upcaster raised on an event it was
+  delivering), its supervisor restarts it **without any subscriptions**, and
+  subscribers are not told. A subscriber that doesn't watch for this silently
+  stops receiving events.
+
+  So every subscriber must monitor `EventstoreSqlite.Subscriptions` itself and
+  subscribe again when it goes down:
+
+      def init(stream) do
+        {:ok, subscribe(%{stream: stream, version: 0})}
+      end
+
+      defp subscribe(state) do
+        ref = Process.monitor(EventstoreSqlite.Subscriptions)
+        :ok = EventstoreSqlite.subscribe_to_stream(self(), state.stream, state.version)
+        Map.put(state, :ref, ref)
+      end
+
+      def handle_info({:events, events}, state) do
+        # handle events, skipping versions already handled
+        {:noreply, %{state | version: List.last(events).stream_version + 1}}
+      end
+
+      def handle_info({:DOWN, ref, :process, _pid, _reason}, %{ref: ref} = state) do
+        Process.send_after(self(), :resubscribe, 100)
+        {:noreply, state}
+      end
+
+      def handle_info(:resubscribe, state) do
+        {:noreply, subscribe(state)}
+      catch
+        :exit, _not_restarted_yet ->
+          Process.send_after(self(), :resubscribe, 100)
+          {:noreply, state}
+      end
+
+  Get these right:
+
+    * **Monitor before subscribing.** Subscribing first leaves a moment in
+      which a crash goes unnoticed: the monitor would then watch the restarted
+      process, which doesn't hold the subscription.
+    * **Don't resubscribe at once on `:DOWN`.** The supervisor may not have
+      restarted the process yet, and the call then exits. Wait, and retry when
+      it does.
+    * **Resubscribe from your own position:** the version after the last event
+      you handled, not the one you subscribed with. Events that were in flight
+      during the crash may arrive again, so handle a version you have already
+      seen as a duplicate.
+    * **The process that must monitor is the subscriber**, the one receiving
+      `{:events, _}`. When one process subscribes another (`subscriber_pid`
+      isn't `self()`), the monitor has to be set up by the subscriber, or
+      the `:DOWN` message reaches a process that doesn't hold the subscription.
+
+  Subscribe processes on the same node as the store. A subscriber on another
+  node loses its subscription when the connection between the nodes drops,
+  and this monitor doesn't cover that.
 
   Options:
 

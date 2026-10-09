@@ -3,8 +3,8 @@
 - **Status:** Implemented 2026-10-09 (see "Implementation notes" at the end).
   Still to do: run the manual stress test together (TODO in
   `docs/sync-manual-stress-test.md`); schedule `mix eventstore.sync_stress`
-  nightly once the repo has CI (it isn't scheduled anywhere yet); issue 0009
-  before production use. Plan revision 7, approved by both outside reviewers; see [the review log](0008-multi-node-sync-review.md). Design and decisions:
+  nightly once the repo has CI (it isn't scheduled anywhere yet). Consumers must
+  follow the subscriber pattern from 0009 (version 1). Plan revision 7, approved by both outside reviewers; see [the review log](0008-multi-node-sync-review.md). Design and decisions:
   [0008](0008-multi-node-sync.md). Related: [0009](0009-subscriptions-end-silently.md).
 - **Goal:** two instances of an app, each with its own eventstore_sqlite
   database, both holding every event. Each stream has exactly one node that may
@@ -95,6 +95,8 @@
 - A5. The app connects the nodes, for example with libcluster. The replicator
   uses `:erpc` and reacts to `:nodeup`/`:nodedown`.
 - A6. 0009 ships before sync goes to production, but is not part of this plan.
+  (Done 2026-10-09 as version 1: subscribers monitor the subscription process
+  themselves, as documented in `subscribe_to_stream/5`.)
   Sync works without it. With sync, every node's projections and LiveViews
   depend on `Subscriptions` for events written elsewhere. A single crash there
   (for example an upcaster raising on an event written by the other node's
