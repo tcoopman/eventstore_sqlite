@@ -8,6 +8,13 @@ config :eventstore_sqlite, EventstoreSqlite.RepoRead, database: Path.expand("../
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :eventstore_sqlite, EventstoreSqlite.RepoWrite, database: Path.expand("../test.db", Path.dirname(__ENV__.file))
+
+config :eventstore_sqlite, EventstoreSqlite.TestWeb.Endpoint,
+  secret_key_base: String.duplicate("live_eventstore", 5),
+  live_view: [signing_salt: "live_eventstore"],
+  render_errors: [formats: [html: EventstoreSqlite.TestWeb.ErrorHTML], layout: false],
+  server: false
+
 config :eventstore_sqlite, :sync, node_id: "test-node"
 config :eventstore_sqlite, failpoints: true
 config :eventstore_sqlite, subscription_reconcile_interval: 200

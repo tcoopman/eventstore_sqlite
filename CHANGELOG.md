@@ -5,6 +5,35 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 `YYYY-MM-DD`). The categories follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2026-10-10]
+
+### Added
+
+- **live_eventstore**, a read-only LiveView dashboard to mount in a Phoenix
+  router, like LiveDashboard: `import EventstoreSqlite.LiveEventstore.Router`,
+  then `live_eventstore "/eventstore"` inside a scope that pipes through your
+  browser pipeline. This first version is an overview of the streams:
+  - totals for streams, events, the `"$all"` position and archived streams;
+  - every stream with its event count, creation time and last event time,
+    searchable by name, sortable and paged, with system streams on request;
+  - with sync enabled, this node's role and each stream's owner;
+  - auto-refresh (off, 1 s, 5 s or 15 s).
+
+  It serves its own JavaScript, built from the application's `phoenix` and
+  `phoenix_live_view` packages, so it needs no asset build. Options:
+  `:on_mount` (for authentication), `:live_socket_path`,
+  `:live_session_name`. Put it behind authentication.
+  `dev/live_eventstore_demo.exs` serves it on a demo store.
+
+### Changed
+
+- `phoenix_live_view` is an optional dependency. Applications without it are
+  unaffected: the dashboard modules are only compiled when it is present.
+- Development dependencies: `mneme` is pinned to 0.9.3, which lets dev and
+  test use current LiveView (it conflicted through `igniter`). That also
+  removed `mint` and `hpax` from the lock file. `bandit` was added for the demo
+  server.
+
 ## [2026-10-09]
 
 ### Breaking

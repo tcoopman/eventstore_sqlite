@@ -10,6 +10,30 @@ event, with exactly one node allowed to write each stream. See
 `docs/issues/0008-multi-node-sync-plan.md`, and the manual stress test in
 `docs/sync-manual-stress-test.md`.
 
+## live_eventstore: a dashboard for your router
+
+A read-only LiveView page of the store, mounted like Phoenix LiveDashboard. It
+shows totals, the streams with their event counts and timestamps (searchable,
+sortable, paged), and, with sync enabled, this node's role and the owner of
+each stream. It needs `phoenix_live_view` in your application; this library
+only depends on it optionally.
+
+```elixir
+# router.ex
+import EventstoreSqlite.LiveEventstore.Router
+
+scope "/" do
+  pipe_through [:browser, :require_admin]
+  live_eventstore "/eventstore"
+end
+```
+
+Put it behind authentication: it shows stream names. See
+`EventstoreSqlite.LiveEventstore.Router` for the options. To try it without an
+app: `DB=demo.db mix ecto.create && DB=demo.db mix ecto.migrate && DB=demo.db
+mix run dev/live_eventstore_demo.exs`, then open
+<http://localhost:4000/eventstore>.
+
 ## Installation
 
 If [available in Hex](https://hex.pm/docs/publish), the package can be installed
