@@ -1,0 +1,227 @@
+defmodule EventstoreSqlite.Cluster do
+  @moduledoc """
+  Runs eventstore_sqlite nodes as separate BEAMs for two-node tests.
+
+  Each node is a `:peer` controlled over its standard I/O, so the test's
+  control channel doesn't use distribution, and it is started with
+  `dist_auto_connect never`: the nodes only see each other after `connect/2`,
+  and a `disconnect/2` lasts until the next `connect/2`.
+  """
+
+  defstruct [:node_id, :db, :peer, :node]
+
+  @cookie ~c"eventstore_sqlite_cluster"
+
+  def start(node_id, opts \\ []) do
+    db = Keyword.get_lazy(opts, :db, &new_db_path/0)
+    name = :"esq_#{String.replace(node_id, ~r/\W/, "_")}_#{System.unique_integer([:positive])}"
+    paths = Enum.flat_map(:code.get_path(), &[~c"-pa", &1])
+
+    {:ok, peer, node} =
+      :peer.start(%{
+        name: name,
+        connection: :standard_io,
+        args: [~c"-setcookie", @cookie, ~c"-kernel", ~c"dist_auto_connect", ~c"never" | paths]
+      })
+
+    cluster_node = %__MODULE__{node_id: node_id, db: db, peer: peer, node: node}
+    env = env(db, Keyword.get(opts, :configured_node_id, node_id))
+
+    case call(cluster_node, EventstoreSqlite.Cluster.Remote, :boot, [env], 60_000) do
+      :ok ->
+        {:ok, cluster_node}
+
+      {:error, reason} ->
+        stop(cluster_node)
+        {:error, reason}
+    end
+  end
+
+  def start!(node_id, opts \\ []) do
+    {:ok, node} = start(node_id, opts)
+    node
+  end
+
+  def new_db_path do
+    dir = Path.join(System.tmp_dir!(), "eventstore_sqlite_cluster")
+    File.mkdir_p!(dir)
+    Path.join(dir, "#{System.unique_integer([:positive])}.db")
+  end
+
+  def remove_db(path), do: Enum.each(["", "-wal", "-shm"], &File.rm(path <> &1))
+
+  defp env(db, node_id) do
+    config =
+      :eventstore_sqlite
+      |> Application.get_all_env()
+      |> Keyword.update!(EventstoreSqlite.RepoWrite, &Keyword.put(&1, :database, db))
+      |> Keyword.update!(EventstoreSqlite.RepoRead, &Keyword.put(&1, :database, db))
+      |> Keyword.put(:sync, node_id: node_id)
+
+    [eventstore_sqlite: config]
+  end
+
+  def call(%__MODULE__{peer: peer}, module, fun, args, timeout \\ 30_000) do
+    :peer.call(peer, module, fun, args, timeout)
+  end
+
+  def connect(a, b), do: true = call(a, Node, :connect, [b.node])
+  def disconnect(a, b), do: call(a, :erlang, :disconnect_node, [b.node])
+
+  def stop(%__MODULE__{peer: peer}) do
+    :peer.stop(peer)
+  catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
+  Kills the node at once, as `kill -9` would: no shutdown, no flushing.
+  """
+  def kill(%__MODULE__{peer: peer}) do
+    ref = Process.monitor(peer)
+    :peer.cast(peer, :erlang, :halt, [137, [flush: false]])
+
+    receive do
+      {:DOWN, ^ref, :process, ^peer, _} -> :ok
+    after
+      10_000 -> raise "the node didn't die"
+    end
+  end
+
+  def restart(%__MODULE__{} = node, opts \\ []) do
+    start(node.node_id, Keyword.put(opts, :db, node.db))
+  end
+
+  def append(node, stream, events, expected_version \\ :any_version) do
+    call(node, EventstoreSqlite, :append_to_stream, [stream, events, expected_version])
+  end
+
+  def read(node, stream) do
+    call(node, EventstoreSqlite, :read_stream_forward, [stream, [count: nil]])
+  end
+
+  def texts(node, stream), do: node |> read(stream) |> Enum.map(& &1.data.text)
+
+  def status(node), do: call(node, EventstoreSqlite.Sync, :status, [])
+
+  def wait_until(fun, timeout \\ 10_000) do
+    wait_until_deadline(fun, System.monotonic_time(:millisecond) + timeout)
+  end
+
+  defp wait_until_deadline(fun, deadline) do
+    case fun.() do
+      result when result not in [nil, false] ->
+        result
+
+      result ->
+        if System.monotonic_time(:millisecond) > deadline do
+          raise ExUnit.AssertionError, message: "condition not met in time, last result: #{inspect(result)}"
+        else
+          Process.sleep(25)
+          wait_until_deadline(fun, deadline)
+        end
+    end
+  end
+
+  @doc """
+  Waits until `node` has pulled everything `peer` reported.
+  """
+  def caught_up(node, peer) do
+    wait_until(fn ->
+      case status(node).peers[peer.node_id] do
+        %{lag: 0, peer_head: head} = status when is_integer(head) -> head == status(peer).head and status
+        _ -> false
+      end
+    end)
+  end
+
+  @doc """
+  Waits until both nodes have pulled everything from each other and their
+  histories are identical.
+  """
+  def converged(a, b) do
+    caught_up(a, b)
+    caught_up(b, a)
+    wait_until(fn -> call(a, EventstoreSqlite.Sync, :verify, [b.node_id, :strict]) == :ok end)
+  end
+
+  @doc """
+  Starts a home node, snapshots it for a second node, and starts that node on
+  the copy. Returns `{home, second}`, connected.
+  """
+  def pair(home_id \\ "main-node", second_id \\ "secondary-node-1", opts \\ []) do
+    home = start!(home_id)
+    :ok = call(home, EventstoreSqlite.Sync, :enable, [home_id])
+    Keyword.get(opts, :before_snapshot, fn _ -> :ok end).(home)
+    path = new_db_path()
+    {:ok, _} = call(home, EventstoreSqlite.Sync, :snapshot, [path, [peer: second_id]])
+    second = start!(second_id, db: path)
+    connect(home, second)
+    {home, second}
+  end
+end
+
+defmodule EventstoreSqlite.Cluster.Remote do
+  @moduledoc """
+  Runs on a cluster node.
+  """
+
+  def boot(env) do
+    Application.load(:eventstore_sqlite)
+    for {app, config} <- env, {key, value} <- config, do: Application.put_env(app, key, value)
+    Logger.configure(level: :warning)
+
+    {:ok, _, _} =
+      Ecto.Migrator.with_repo(EventstoreSqlite.RepoWrite, &Ecto.Migrator.run(&1, :up, all: true, log: false))
+
+    case Application.ensure_all_started(:eventstore_sqlite) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def notes(texts), do: Enum.map(List.wrap(texts), &%EventstoreSqlite.Test.Note{text: &1})
+
+  @doc """
+  Subscribes a process on this node that keeps everything it receives, for
+  `received/1`.
+  """
+  def collect(stream) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        :ok = EventstoreSqlite.subscribe_to_stream(self(), stream)
+        send(parent, :subscribed)
+        collect_loop([])
+      end)
+
+    receive do
+      :subscribed -> pid
+    end
+  end
+
+  defp collect_loop(received) do
+    receive do
+      {:events, events} ->
+        collect_loop(received ++ Enum.map(events, &{&1.stream_version, &1.id, &1.data}))
+
+      {:stream_archived, _} = message ->
+        collect_loop(received ++ [message])
+
+      {:received, from} ->
+        send(from, {:received, received})
+        collect_loop(received)
+    end
+  end
+
+  def received(pid) do
+    send(pid, {:received, self()})
+
+    receive do
+      {:received, received} -> received
+    after
+      5_000 -> :timeout
+    end
+  end
+end

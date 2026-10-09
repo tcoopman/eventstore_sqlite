@@ -40,6 +40,16 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
     (`EventstoreSqlite.Sync.resume/1` clears the halt after a repair).
     Entries written under a revoked ownership generation are quarantined
     (`EventstoreSqlite.Sync.quarantine/0`).
+  - Provision the second node from `EventstoreSqlite.Sync.snapshot/2`: a
+    consistent copy of the home node's database that only the named node can
+    claim, once, at its first boot. Each node then runs a replicator per peer
+    that pulls over Erlang distribution (nodes find each other by node id
+    through `:pg`; the application connects the nodes). Replication survives
+    partitions and restarts, since the cursor is stored with the data.
+  - `EventstoreSqlite.Sync.status/0` reports each peer's state, lag,
+    acknowledgements and quarantine. `EventstoreSqlite.Sync.verify/2`
+    compares both nodes' stream histories by content, also while they write.
+    `EventstoreSqlite.Sync.remove_peer/2` removes a peer once it is caught up.
   - Configure the node id with `config :eventstore_sqlite, :sync, node_id: "…"`.
     A store with sync enabled refuses to start under another node id, or
     without one.

@@ -23,8 +23,12 @@ defmodule EventstoreSqlite.Sync do
   alias Ecto.Adapters.SQL
   alias EventstoreSqlite.RepoRead
   alias EventstoreSqlite.RepoWrite
+  alias EventstoreSqlite.Sync.Export
   alias EventstoreSqlite.Sync.Log
+  alias EventstoreSqlite.Sync.Server
   alias EventstoreSqlite.Sync.State
+  alias EventstoreSqlite.Sync.Write
+  alias EventstoreSqlite.SystemEvents.PeerRemoved
   alias EventstoreSqlite.SystemEvents.SyncDisabled
   alias EventstoreSqlite.SystemEvents.SyncEnabled
   alias EventstoreSqlite.SystemEvents.SyncHalted
@@ -92,6 +96,207 @@ defmodule EventstoreSqlite.Sync do
   end
 
   @doc """
+  Writes a consistent copy of this store to `path`, for provisioning the node
+  `peer` (the `:peer` option). Only the home node can make snapshots, one at a
+  time, and only for one peer: a second peer must wait until the first is
+  removed with `remove_peer/2`.
+
+  Start the new node on the copy with `config :eventstore_sqlite, :sync,
+  node_id: peer`. At its first boot it claims the copy: it takes `peer` as its
+  identity and continues replicating from where the copy was made. A copy can
+  be claimed once, and only by `peer`.
+
+  The peer is pinned from the moment of the snapshot: the log isn't pruned past
+  that point until the peer has pulled it.
+
+  Returns `{:ok, %{path, snapshot_id, head_seq}}`, or `{:error, reason}` with
+  `reason` one of `{:exists, path}`, `:not_home`, `:sync_disabled`,
+  `:diverged`, `:self`, `:retired`, `{:peer_exists, other}`,
+  `:peer_already_active` or `{:snapshot_failed, message}`.
+  """
+  def snapshot(path, opts) when is_binary(path) do
+    peer = Keyword.fetch!(opts, :peer)
+    Server.snapshot(path, peer)
+  end
+
+  @doc """
+  Removes `peer` from the replication group, on the home node.
+
+  The peer must own no streams: release them first (`EventstoreSqlite.Ownership.reclaim/2`)
+  or revoke the node (`EventstoreSqlite.Ownership.revoke_node/1`). Then:
+
+    * a live peer must have pulled everything from this node, and this node
+      everything the peer reported (`{:error, :not_caught_up}` otherwise);
+    * a retired peer must be drained: it reported itself diverged, and this node
+      has pulled up to the head it reported then (`{:error, :not_drained}`
+      otherwise). Its late entries are then all applied or quarantined.
+
+  `discard_unpulled: true` skips those checks, for a peer that is gone for
+  good. Whatever it wrote after this node's last pull is lost; the removal
+  records the seq after which entries were discarded.
+
+  With no peer left, the log is pruned empty.
+  """
+  def remove_peer(peer, opts \\ []) when is_binary(peer) do
+    discard? = Keyword.get(opts, :discard_unpulled, false)
+
+    transact_state(fn repo, state ->
+      with :ok <- guard_home(state),
+           :ok <- removable(repo, state, peer, discard?) do
+        %{cursor: cursor, head: head} = origin_status(repo, peer)
+        discarded_after = if discard? and head != cursor, do: cursor
+
+        if discarded_after do
+          Logger.warning("eventstore_sqlite sync: removing #{peer}; entries it wrote after seq #{cursor} are discarded")
+        end
+
+        state = State.record(repo, state, %PeerRemoved{node_id: peer, discarded_after: discarded_after})
+        SQL.query!(repo, "DELETE FROM sync_acks WHERE peer = ?1", [peer])
+        SQL.query!(repo, "DELETE FROM sync_cursors WHERE origin = ?1", [peer])
+        Export.prune(repo, state)
+        {:ok, state}
+      end
+    end)
+  end
+
+  defp removable(repo, state, peer, discard?) do
+    cond do
+      not Map.has_key?(state.peers, peer) -> {:error, :unknown_peer}
+      State.generations_of(state, peer) != [] -> {:error, :owns_streams}
+      discard? -> :ok
+      caught_up?(repo, state, peer) -> :ok
+      Map.has_key?(state.retired, peer) -> {:error, :not_drained}
+      true -> {:error, :not_caught_up}
+    end
+  end
+
+  defp caught_up?(repo, state, peer) do
+    %{cursor: cursor, head: head, diverged: diverged} = origin_status(repo, peer)
+
+    if Map.has_key?(state.retired, peer) do
+      diverged and cursor == head
+    else
+      cursor == head and peer_ack(repo, peer) == Log.head(repo)
+    end
+  end
+
+  defp origin_status(repo, peer) do
+    case SQL.query!(repo, "SELECT seq, origin_head, origin_diverged FROM sync_cursors WHERE origin = ?1", [peer]) do
+      %{rows: [[seq, head, diverged]]} -> %{cursor: seq, head: head, diverged: diverged == 1}
+      %{rows: []} -> %{cursor: 0, head: nil, diverged: false}
+    end
+  end
+
+  defp peer_ack(repo, peer) do
+    case SQL.query!(repo, "SELECT seq FROM sync_acks WHERE peer = ?1", [peer]) do
+      %{rows: [[seq]]} -> seq
+      %{rows: []} -> nil
+    end
+  end
+
+  @doc """
+  The sync state of this node and, per peer:
+
+    * `state` — `:connected`, `:disconnected`, `:halted`, `:retired` (revoked,
+      not heard from since), `:diverged` (revoked and reported itself
+      diverged), `:drained` (diverged and fully pulled), or `:ambiguous`
+      (several nodes claim the peer's id);
+    * `cursor` — the last of its entries this node applied, and `peer_head`, the
+      last head it reported; `lag` is their difference;
+    * `acked` — the last of this node's entries the peer confirmed, and
+      `pinned_seq`; the log can't be pruned past the smaller one;
+    * `owns` — the ownership generations it holds;
+    * `quarantined` — how many of its entries were quarantined;
+    * `halted`, `last_error`, `last_success`.
+  """
+  def status do
+    state = State.load(RepoRead)
+
+    %{
+      node_id: state.node_id,
+      home: state.home,
+      enabled: state.enabled,
+      home?: State.home?(state),
+      diverged: state.diverged,
+      head: Log.head(RepoRead),
+      assignments: state.owners,
+      peers: Map.new(state.peers, fn {peer, info} -> {peer, peer_status(state, peer, info)} end)
+    }
+  end
+
+  defp peer_status(state, peer, info) do
+    origin = origin_status(RepoRead, peer)
+    replicator = EventstoreSqlite.Sync.Replicator.status(peer)
+
+    %{rows: [[quarantined]]} =
+      SQL.query!(RepoRead, "SELECT count(*) FROM sync_quarantine WHERE origin = ?1", [peer])
+
+    connection =
+      cond do
+        Map.has_key?(state.retired, peer) and origin.diverged and origin.cursor == origin.head -> :drained
+        Map.has_key?(state.retired, peer) and origin.diverged -> :diverged
+        Map.has_key?(state.retired, peer) -> :retired
+        Map.has_key?(state.halted, peer) -> :halted
+        true -> replicator.connection
+      end
+
+    %{
+      state: connection,
+      cursor: origin.cursor,
+      peer_head: origin.head,
+      lag: if(origin.head, do: max(origin.head - origin.cursor, 0)),
+      acked: peer_ack(RepoRead, peer),
+      pinned_seq: info.pinned_seq,
+      owns: State.generations_of(state, peer),
+      quarantined: quarantined,
+      halted: Map.get(state.halted, peer),
+      last_error: replicator.last_error,
+      last_success: replicator.last_success
+    }
+  end
+
+  @doc """
+  Compares this node's streams with `peer`'s, over Erlang distribution.
+
+  For every stream name, both nodes' histories (archived incarnations, then
+  the live stream) are compared by content: event ids, types, data, metadata
+  and timestamps.
+
+    * `:prefix` (default) works while both nodes write: one node's history of a
+      stream must be a prefix of the other's. Returns `:ok`, or
+      `{:lag, [{stream, :local_behind | :remote_behind}]}`.
+    * `:strict` requires identical histories; use it once replication is idle.
+
+  Returns `{:error, differences}` when the histories fork, or in `:strict`
+  mode when they differ at all, and `{:error, :not_connected}` when the peer
+  can't be reached.
+  """
+  def verify(peer, mode \\ :prefix) when mode in [:prefix, :strict] do
+    case :pg.get_members(Write.pg_scope(), {:node, peer}) do
+      [pid] -> verify_with(node(pid), mode)
+      _ -> {:error, :not_connected}
+    end
+  end
+
+  defp verify_with(peer_node, mode) do
+    alias EventstoreSqlite.Sync.Verify
+
+    remote = :erpc.call(peer_node, Verify, :summaries, [], 120_000)
+    local = Verify.summaries()
+
+    prefix_digest = fn
+      :local, stream, first_id, count -> Verify.prefix_digest(stream, first_id, count)
+      :remote, stream, first_id, count -> :erpc.call(peer_node, Verify, :prefix_digest, [stream, first_id, count])
+    end
+
+    case Verify.compare(local, remote, mode, prefix_digest) do
+      {:ok, []} -> :ok
+      {:ok, lag} -> {:lag, lag}
+      error -> error
+    end
+  end
+
+  @doc """
   Clears a halt of replication from `peer`, after the cause has been repaired,
   so replication resumes. A halt is recorded when an entry from the peer can't
   be applied, for example a version conflict or an ownership violation.
@@ -125,7 +330,7 @@ defmodule EventstoreSqlite.Sync do
   end
 
   @doc false
-  defdelegate export(request), to: EventstoreSqlite.Sync.Export
+  defdelegate export(request), to: Export
 
   @doc false
   def halt(peer, reason) do
@@ -192,7 +397,7 @@ defmodule EventstoreSqlite.Sync do
   defp after_state_change(state) do
     EventstoreSqlite.Subscriptions.ping(State.sync_stream())
     EventstoreSqlite.Subscriptions.ping(State.ownership_stream())
-    if state.enabled, do: EventstoreSqlite.Sync.Write.poke(state.node_id)
-    EventstoreSqlite.Sync.Server.refresh()
+    if state.enabled, do: Write.poke(state.node_id)
+    Server.refresh()
   end
 end
