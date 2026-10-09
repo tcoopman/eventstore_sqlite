@@ -20,9 +20,11 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 - `EventstoreSqlite.stream_info/1` and `EventstoreSqlite.list_stream_infos/1`
   return `%EventstoreSqlite.StreamInfo{}`: a stream's version, the times of
   its first and last event, and with sync enabled its owner, without reading
-  its events. The list is ordered by name, searchable anywhere in the name
-  (`:search`, ignoring ASCII case), and paged by name (`:after`, `:limit`),
-  with system streams on request (`:system`).
+  its events. The list is ordered by name, or with `order: :newest` by
+  creation on this node, newest first. It is searchable anywhere in the name
+  (`:search`, ignoring ASCII case), paged with a cursor (`:after` takes the
+  previous page's `next`, `:limit`), and lists system streams on request
+  (`:system`).
 - `EventstoreSqlite.subscribe_to_changes/1`: the subscriber receives
   `{:eventstore_sqlite, :changed, kinds}`, with `kinds` from `[:streams,
   :sync]`, when streams are appended to or archived (here or by an import),

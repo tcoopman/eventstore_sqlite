@@ -506,60 +506,86 @@ defmodule EventstoreSqlite do
   end
 
   @doc """
-  One page of live streams, ordered by name, each as an
-  `EventstoreSqlite.StreamInfo`.
+  One page of live streams, each as an `EventstoreSqlite.StreamInfo`.
 
   Options:
 
+    * `:order` — `:name` (default), by name; or `:newest`, the stream created
+      last on this node first. On a sync peer, streams are created on this
+      node when it imports their first event, so the order can differ from
+      the other node's, and from the order of `created_at`.
     * `:search` — only streams whose name contains this text, ignoring the
       case of ASCII letters. `%`, `_` and `\\` match themselves. Every stream
       name is checked, so on a large store a search costs a scan of the names.
-    * `:after` — the page starts after this stream name. Pass the previous
-      page's `next`.
+    * `:after` — the previous page's `next`, to get the page after it, with
+      the same `:order`.
     * `:limit` — the most streams on a page (default #{@default_page_size}); it
       must be a positive integer.
     * `:system` — also list the system streams that exist (default `false`).
 
-  Returns `%{entries: [stream_info], next: stream_id | nil}`, where `next` is
-  `nil` on the last page. Pages are cut by name, not by position, so a stream
-  created or archived while you page is listed or skipped according to where
-  its name sorts, and no other stream is listed twice or skipped.
+  Returns `%{entries: [stream_info], next: cursor | nil}`, where `next` is
+  `nil` on the last page. Treat `next` as opaque: it is a string meant for
+  `:after`. Pages are cut by the order's key (the name, or the creation), not
+  by position, so a stream created or archived while you page is listed or
+  skipped according to where it sorts, and no other stream is listed twice or
+  skipped. Archiving a stream and appending to its name again creates a new
+  stream, which sorts as the newest.
   """
   def list_stream_infos(opts \\ []) do
     limit = positive_integer_option!(opts, :limit, @default_page_size)
+    order = Keyword.get(opts, :order, :name)
 
     conditions =
       Enum.reject(
         [
           if(!Keyword.get(opts, :system, false), do: not_system_condition()),
           search_condition(Keyword.get(opts, :search)),
-          if(after_name = Keyword.get(opts, :after), do: {"s.stream_id > ?", [after_name]})
+          after_condition(order, Keyword.get(opts, :after))
         ],
         &is_nil/1
       )
 
-    infos = stream_infos(conditions, limit + 1)
+    rows = stream_rows(conditions, order_by(order), limit + 1)
 
-    if length(infos) > limit do
-      entries = Enum.take(infos, limit)
-      %{entries: entries, next: List.last(entries).stream_id}
-    else
-      %{entries: infos, next: nil}
+    page = Enum.take(rows, limit)
+    next = if length(rows) > limit, do: cursor(order, List.last(page))
+    %{entries: Enum.map(page, &elem(&1, 1)), next: next}
+  end
+
+  defp order_by(:name), do: "s.stream_id"
+  defp order_by(:newest), do: "s.id DESC"
+  defp order_by(order), do: raise(ArgumentError, "expected :order to be :name or :newest, got: #{inspect(order)}")
+
+  defp after_condition(_order, nil), do: nil
+  defp after_condition(:name, stream_id), do: {"s.stream_id > ?", [stream_id]}
+
+  defp after_condition(:newest, cursor) do
+    case Integer.parse(cursor) do
+      {id, ""} -> {"s.id < ?", [id]}
+      _ -> raise ArgumentError, "expected :after to be a cursor returned as next, got: #{inspect(cursor)}"
     end
   end
 
+  defp cursor(:name, {_id, info}), do: info.stream_id
+  defp cursor(:newest, {id, _info}), do: Integer.to_string(id)
+
   defp stream_infos(conditions, limit) do
-    rows = Store.stream_rows(EventstoreSqlite.RepoRead, conditions, limit)
+    conditions |> stream_rows("s.stream_id", limit) |> Enum.map(&elem(&1, 1))
+  end
+
+  defp stream_rows(conditions, order_by, limit) do
+    rows = Store.stream_rows(EventstoreSqlite.RepoRead, conditions, order_by, limit)
     sync = Sync.State.load(EventstoreSqlite.RepoRead)
 
-    Enum.map(rows, fn [stream_id, version, created_at, last_event_at] ->
-      %EventstoreSqlite.StreamInfo{
-        stream_id: stream_id,
-        version: version,
-        created_at: timestamp(created_at),
-        last_event_at: timestamp(last_event_at),
-        owner: if(sync.enabled and stream_id not in @system_streams, do: Sync.State.owner(sync, stream_id))
-      }
+    Enum.map(rows, fn [id, stream_id, version, created_at, last_event_at] ->
+      {id,
+       %EventstoreSqlite.StreamInfo{
+         stream_id: stream_id,
+         version: version,
+         created_at: timestamp(created_at),
+         last_event_at: timestamp(last_event_at),
+         owner: if(sync.enabled and stream_id not in @system_streams, do: Sync.State.owner(sync, stream_id))
+       }}
     end)
   end
 

@@ -258,23 +258,23 @@ defmodule EventstoreSqlite.Store do
   end
 
   @doc """
-  Live streams as `[stream_id, version, first_event_at, last_event_at]` rows,
-  ordered by name. `conditions` are `{sql, params}` pairs on `s.stream_id`,
-  each with `?` placeholders.
+  Live streams as `[id, stream_id, version, first_event_at, last_event_at]`
+  rows, ordered by `order_by` (SQL on `s`). `conditions` are `{sql, params}`
+  pairs on `s`, each with `?` placeholders.
   """
-  def stream_rows(repo, conditions, limit) do
+  def stream_rows(repo, conditions, order_by, limit) do
     where = Enum.map_join(conditions, " AND ", &elem(&1, 0))
     params = Enum.flat_map(conditions, &elem(&1, 1))
 
     SQL.query!(
       repo,
       """
-      SELECT s.stream_id, s.stream_version,
+      SELECT s.id, s.stream_id, s.stream_version,
              (#{event_time_sql("ASC")}),
              (#{event_time_sql("DESC")})
       FROM streams s
       #{if where != "", do: "WHERE " <> where}
-      ORDER BY s.stream_id
+      ORDER BY #{order_by}
       LIMIT ?
       """,
       params ++ [limit]

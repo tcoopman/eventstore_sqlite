@@ -108,6 +108,27 @@ defmodule EventstoreSqlite.StreamInfoTest do
       assert names(EventstoreSqlite.list_stream_infos(search: "x:", limit: 2, after: "x:2")) == ["x:3"]
     end
 
+    test "lists the newest streams first on request, paging by creation" do
+      assert %{entries: [%{stream_id: "e"}, %{stream_id: "d"}], next: next} =
+               EventstoreSqlite.list_stream_infos(order: :newest, limit: 2)
+
+      :ok = EventstoreSqlite.append_to_stream("f", notes(1))
+
+      assert names(EventstoreSqlite.list_stream_infos(order: :newest, limit: 2, after: next)) == ["c:100%_off", "a"]
+      assert names(EventstoreSqlite.list_stream_infos(order: :newest, limit: 1)) == ["f"]
+    end
+
+    test "a stream archived and created again is the newest" do
+      :ok = EventstoreSqlite.archive_stream("b")
+      :ok = EventstoreSqlite.append_to_stream("b", notes(1))
+      assert names(EventstoreSqlite.list_stream_infos(order: :newest, limit: 1)) == ["b"]
+    end
+
+    test "rejects an unknown order or a cursor it didn't hand out" do
+      assert_raise ArgumentError, fn -> EventstoreSqlite.list_stream_infos(order: :size) end
+      assert_raise ArgumentError, fn -> EventstoreSqlite.list_stream_infos(order: :newest, after: "b") end
+    end
+
     test "rejects a limit that isn't a positive integer" do
       assert_raise ArgumentError, fn -> EventstoreSqlite.list_stream_infos(limit: 0) end
     end

@@ -59,10 +59,12 @@ API. They are dropped. Sync is where an operator needs insight.
 - **Search anywhere in the name, not by prefix.** Stream names can be
   anything; `category:id` is only a convention, so the API doesn't assume it.
   A search scans the stream names, which is documented.
-- **Ordered by name only, paged by name.** No sort by version or time, and no
+- **Ordered by name, paged by name.** No sort by version or time, and no
   total: those need extra indexes or a scan, and the dashboard doesn't need
   them. `:after` takes the last name of the previous page, so a stream created
-  while paging doesn't shift the pages.
+  while paging doesn't shift the pages. Later, `order: :newest` was added:
+  newest created first, paged by the `streams` row id, which `AUTOINCREMENT`
+  never reuses. `next` became an opaque cursor.
 - **`StreamInfo` is a struct**, like `RecordedEvent`.
 - **`StreamInfo` carries the owner** when sync is enabled. One sync state read
   per call, so a page of 50 costs no more than one stream.
