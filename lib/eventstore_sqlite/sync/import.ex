@@ -138,6 +138,7 @@ defmodule EventstoreSqlite.Sync.Import do
             context = Enum.reduce_while(entries, context, &apply_entry/2)
             State.save(repo, context.state)
             set_cursor(repo, origin, context.cursor, origin_status)
+            Failpoint.hit(:import_before_commit)
             {:ok, context}
           end
         end,

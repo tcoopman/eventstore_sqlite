@@ -42,10 +42,11 @@ defmodule EventstoreSqlite.Cluster do
     node
   end
 
+  def db_dir, do: Path.join(System.tmp_dir!(), "eventstore_sqlite_cluster")
+
   def new_db_path do
-    dir = Path.join(System.tmp_dir!(), "eventstore_sqlite_cluster")
-    File.mkdir_p!(dir)
-    Path.join(dir, "#{System.unique_integer([:positive])}.db")
+    File.mkdir_p!(db_dir())
+    Path.join(db_dir(), "#{Base.url_encode64(:crypto.strong_rand_bytes(9))}.db")
   end
 
   def remove_db(path), do: Enum.each(["", "-wal", "-shm"], &File.rm(path <> &1))
@@ -166,6 +167,8 @@ defmodule EventstoreSqlite.Cluster.Remote do
   Runs on a cluster node.
   """
 
+  alias EventstoreSqlite.Test.Note
+
   def boot(env) do
     Application.load(:eventstore_sqlite)
     for {app, config} <- env, {key, value} <- config, do: Application.put_env(app, key, value)
@@ -180,7 +183,7 @@ defmodule EventstoreSqlite.Cluster.Remote do
     end
   end
 
-  def notes(texts), do: Enum.map(List.wrap(texts), &%EventstoreSqlite.Test.Note{text: &1})
+  def notes(texts), do: Enum.map(List.wrap(texts), &%Note{text: &1})
 
   @doc """
   Subscribes a process on this node that keeps everything it receives, for
@@ -212,6 +215,87 @@ defmodule EventstoreSqlite.Cluster.Remote do
       {:received, from} ->
         send(from, {:received, received})
         collect_loop(received)
+    end
+  end
+
+  @doc """
+  Starts one writer per stream. Each appends one event at a time with an
+  expected version, and records every append that returned `:ok`. A writer
+  stops at `{:error, :not_owner}` or `{:error, :diverged}`, or when
+  `stop_writers/1` is called. Returns the coordinator's pid.
+  """
+  def start_writers(streams, pause \\ 0) do
+    spawn(fn ->
+      coordinator = self()
+      writers = Enum.map(streams, fn stream -> spawn_link(fn -> write_loop(coordinator, stream, nil, pause) end) end)
+      coordinate(writers, [], %{})
+    end)
+  end
+
+  defp write_loop(coordinator, stream, version, pause) do
+    receive do
+      :stop -> send(coordinator, {:done, self(), stream, :stopped})
+    after
+      pause ->
+        version = version || current_version(stream)
+        id = Ecto.UUID.generate()
+        event = %EventstoreSqlite.NewEvent{id: id, data: %Note{text: "#{stream}@#{version}"}}
+
+        case EventstoreSqlite.append_to_stream(stream, [event], {:version, version}) do
+          :ok ->
+            send(coordinator, {:acked, stream, version, id})
+            write_loop(coordinator, stream, version + 1, pause)
+
+          {:error, :wrong_expected_version} ->
+            write_loop(coordinator, stream, nil, pause)
+
+          {:error, reason} ->
+            send(coordinator, {:done, self(), stream, reason})
+        end
+    end
+  end
+
+  defp current_version(stream) do
+    case EventstoreSqlite.read_stream_backward(stream, count: 1) do
+      [event] -> event.stream_version + 1
+      [] -> 0
+    end
+  end
+
+  defp coordinate(writers, acked, done) do
+    receive do
+      {:acked, stream, version, id} ->
+        coordinate(writers, [{stream, version, id} | acked], done)
+
+      {:done, pid, stream, reason} ->
+        coordinate(writers -- [pid], acked, Map.put(done, stream, reason))
+
+      {:stop, from} ->
+        Enum.each(writers, &send(&1, :stop))
+        finish(writers, acked, done, from)
+    end
+  end
+
+  defp finish([], acked, done, from), do: send(from, {:writers, Enum.reverse(acked), done})
+
+  defp finish(writers, acked, done, from) do
+    receive do
+      {:acked, stream, version, id} -> finish(writers, [{stream, version, id} | acked], done, from)
+      {:done, pid, stream, reason} -> finish(writers -- [pid], acked, Map.put(done, stream, reason), from)
+    end
+  end
+
+  @doc """
+  Stops the writers and returns `{acked, stop_reasons}`, where `acked` lists
+  `{stream, version, event_id}` in the order they were acknowledged.
+  """
+  def stop_writers(coordinator) do
+    send(coordinator, {:stop, self()})
+
+    receive do
+      {:writers, acked, done} -> {acked, done}
+    after
+      30_000 -> :timeout
     end
   end
 

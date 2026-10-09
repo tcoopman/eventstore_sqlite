@@ -50,6 +50,13 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
     acknowledgements and quarantine. `EventstoreSqlite.Sync.verify/2`
     compares both nodes' stream histories by content, also while they write.
     `EventstoreSqlite.Sync.remove_peer/2` removes a peer once it is caught up.
+  - `EventstoreSqlite.Ownership` assigns streams, by exact name or trailing
+    `*` prefix, from the home node to the other node (`assign/2`), hands them
+    back without losing a write (`reclaim/2`, `release/1`), or takes them back
+    at once from an unreachable node (`revoke_node/1`). A revoked node's
+    unpulled writes to those streams are quarantined; when it reconnects it
+    becomes diverged and refuses every write until it is rebuilt from a new
+    snapshot under a new node id. Assignments can't overlap.
   - Configure the node id with `config :eventstore_sqlite, :sync, node_id: "…"`.
     A store with sync enabled refuses to start under another node id, or
     without one.
