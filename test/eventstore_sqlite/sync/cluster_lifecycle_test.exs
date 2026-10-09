@@ -170,7 +170,7 @@ defmodule EventstoreSqlite.Sync.ClusterLifecycleTest do
     :ok = append(home, "orders:1", notes(["first group"]))
     converged(home, second)
 
-    assert call(home, Sync, :remove_peer, ["secondary-node-1"]) == :ok
+    wait_until(fn -> call(home, Sync, :remove_peer, ["secondary-node-1"]) == :ok end)
     stop(second)
     assert :ok = call(home, Sync, :disable, [])
     :ok = append(home, "orders:1", notes(["unsynced"]))

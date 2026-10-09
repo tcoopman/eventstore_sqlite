@@ -109,7 +109,9 @@ defmodule EventstoreSqlite.Sync.ClusterOwnershipTest do
     {home, second} = pair()
     first = assign!(home, second, "venue:*")
 
-    assert call(home, Ownership, :reclaim, [first, [timeout: 0]]) == {:error, :timeout}
+    call(home, Failpoint, :set, [:import_before_commit, {:raise, "imports held"}])
+    assert call(home, Ownership, :reclaim, [first, [timeout: 300]]) == {:error, :timeout}
+    call(home, Failpoint, :clear, [:import_before_commit])
     wait_until(fn -> call(home, Ownership, :list, []) == [] end)
 
     second_generation = assign!(home, second, "venue:*")

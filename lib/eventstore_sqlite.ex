@@ -189,6 +189,12 @@ defmodule EventstoreSqlite do
       `:no_stream`.
 
   A mismatch returns `{:error, :wrong_expected_version}` and writes nothing.
+
+  Once sync is enabled (`EventstoreSqlite.Sync`), an append to a stream this
+  node doesn't own returns `{:error, :not_owner}`, and every append on a
+  diverged node returns `{:error, :diverged}`. Checking this costs every append
+  a read of the sync state, also with sync disabled (see "Cost" in
+  `EventstoreSqlite.Sync`).
   `"$all"` and `"$archives"` are reserved; appending to either returns
   `{:error, :system_stream}`. Appending an empty list to an ordinary stream is
   a no-op that returns `:ok` without creating a stream or checking
@@ -324,6 +330,14 @@ defmodule EventstoreSqlite do
   subscriber is not sent this message; archived events simply disappear from
   future reads, leaving position gaps. Subscribe to `"$archives"` to receive
   archive notifications.
+  Events are pushed when an append or import notifies the subscription
+  process. As a safety net for a notification that never came (the appending
+  process died right after its commit), the subscription process also checks
+  once a second whether events were written since its last check, and if so,
+  whether any subscribed stream has undelivered events. On an idle store that
+  costs one primary-key read per second. Change the interval with
+  `config :eventstore_sqlite, subscription_reconcile_interval: ms`.
+
   Subscriber processes are monitored; their registrations are removed when
   they terminate. There is no separate unsubscribe function. Archive
   transactions run through the subscription process to keep cursor changes

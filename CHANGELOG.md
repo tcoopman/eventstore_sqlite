@@ -9,82 +9,90 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 
 ### Breaking
 
-- **The names `"$sync"` and `"$ownership"` are now reserved.** The new
-  migration refuses to run on a store that already has a stream with either
-  name. This must return `0`:
+- **Run the new migration, which reserves `"$sync"` and `"$ownership"`.** It
+  creates the sync tables and refuses to run, changing nothing, on a store that
+  already has a stream with either name. This must return `0` before
+  upgrading:
 
   ```sql
   SELECT count(*) FROM streams WHERE stream_id IN ('$sync', '$ownership');
   ```
 
-- `append_to_stream/3` and `archive_stream/2` can return
-  `{:error, :not_owner}` and `{:error, :diverged}`, but only once sync has been
-  enabled with `EventstoreSqlite.Sync.enable/1`. A store without sync behaves
-  as before.
+  Appending to or archiving either name now returns
+  `{:error, :system_stream}`. Rolling back the migration is refused once sync
+  has been enabled.
+
+- **Once sync is enabled, appends and archives have new errors.**
+  `append_to_stream/3` and `archive_stream/2` return `{:error, :not_owner}` for
+  a stream another node owns, and `{:error, :diverged}` on a node whose
+  ownership was revoked. A store that never enabled sync never returns them.
+
+- **A store with sync enabled only starts under its own node id.** Configure
+  it with `config :eventstore_sqlite, :sync, node_id: "…"`. When the database
+  belongs to another node id, or none is configured, the application fails to
+  start with an error naming the expected id. A store that never enabled sync
+  starts as before, with or without the setting.
 
 ### Added
 
-- Sync between two stores with one writer per stream
-  (`EventstoreSqlite.Sync`). See `docs/issues/0008-multi-node-sync-plan.md`.
-  - A store can be made the home node of a replication group with
-    `EventstoreSqlite.Sync.enable/1`. From then on every append and archive is
-    recorded in a change log in the same transaction, and every write is
-    checked against stream ownership. By default the home node owns every
-    stream. The log stays empty while sync is disabled.
-  - Sync state is kept as system events in `"$sync"` and `"$ownership"`. Like
-    `"$archives"`, neither appears in `"$all"`.
-  - A node pulls the entries of its peer with `EventstoreSqlite.Sync.export/1`
-    and applies them unchanged: the same event ids, timestamps and bytes.
-    Subscribers receive imported events like local ones. An entry that would
-    break the single-writer rule halts replication from that peer
-    (`EventstoreSqlite.Sync.resume/1` clears the halt after a repair).
-    Entries written under a revoked ownership generation are quarantined
-    (`EventstoreSqlite.Sync.quarantine/0`).
-  - Provision the second node from `EventstoreSqlite.Sync.snapshot/2`: a
-    consistent copy of the home node's database that only the named node can
-    claim, once, at its first boot. Each node then runs a replicator per peer
-    that pulls over Erlang distribution (nodes find each other by node id
-    through `:pg`; the application connects the nodes). Replication survives
-    partitions and restarts, since the cursor is stored with the data.
-  - `EventstoreSqlite.Sync.status/0` reports each peer's state, lag,
-    acknowledgements and quarantine. `EventstoreSqlite.Sync.verify/2`
-    compares both nodes' stream histories by content, also while they write.
-    `EventstoreSqlite.Sync.remove_peer/2` removes a peer once it is caught up.
-  - `EventstoreSqlite.Ownership` assigns streams, by exact name or trailing
-    `*` prefix, from the home node to the other node (`assign/2`), hands them
-    back without losing a write (`reclaim/2`, `release/1`), or takes them back
-    at once from an unreachable node (`revoke_node/1`). A revoked node's
-    unpulled writes to those streams are quarantined; when it reconnects it
-    becomes diverged and refuses every write until it is rebuilt from a new
-    snapshot under a new node id. Assignments can't overlap.
-  - Replicators are supervised so that they always come back: a replicator
-    that keeps crashing, or a lost replicator supervisor, is restarted, and
-    the sync server checks every 5 seconds that one runs per peer.
-    Acknowledgements are recorded after an export replies, so a node busy
-    importing never stalls its peer's pull.
-  - `mix eventstore.sync_stress` runs a seeded, randomized two-node stress test
-    (partitions, node and replicator kills, handovers, archives, a forced
-    reclaim) and checks that no acknowledged write is lost.
-    `docs/sync-manual-stress-test.md` is the manual counterpart; the dev
-    environment includes a load generator, `EventstoreSqlite.Sync.DevLoad`.
-  - Configure the node id with `config :eventstore_sqlite, :sync, node_id: "…"`.
-    A store with sync enabled refuses to start under another node id, or
-    without one.
+- **Sync between two stores, with exactly one writer per stream**
+  (`EventstoreSqlite.Sync`, `EventstoreSqlite.Ownership`). Each node keeps its
+  own SQLite database, and both hold every event.
+  - `Sync.enable/1` makes a store the home node. `Sync.snapshot/2` copies it
+    for a second node, which claims the copy at its first boot. The nodes then
+    replicate in both directions over Erlang distribution: they find each other
+    by node id, and the application only connects the nodes.
+  - Imported events keep their ids, timestamps and bytes. Stream versions are
+    identical on both nodes; `"$all"` is per node, in arrival order.
+    Subscribers receive imported events like local ones.
+  - The home node owns every stream by default. `Ownership.assign/2` gives
+    streams, by exact name or trailing `*` prefix, to the other node, and
+    `Ownership.reclaim/2` takes them back without losing a write. When the other
+    node is unreachable, `Ownership.revoke_node/1` takes everything back at
+    once: its unpulled writes are quarantined (`Sync.quarantine/0`), and the
+    node refuses every write from then on and has to be rebuilt from a new
+    snapshot.
+  - An entry that would break the single-writer rule stops replication from
+    that peer instead of being applied (`Sync.resume/1` after a repair).
+  - `Sync.status/0` reports each peer's state and lag. `Sync.verify/2`
+    compares both nodes' streams by content, also while they write.
+    `Sync.remove_peer/2` and `Sync.disable/0` end replication.
+  - Telemetry events: `[:eventstore_sqlite, :sync, :import | :lag | :halt |
+    :quarantine | :diverged]`.
+  - Design, review and the reasoning behind every rule:
+    `docs/issues/0008-multi-node-sync.md`, `docs/issues/0008-multi-node-sync-plan.md`
+    and `docs/issues/0008-multi-node-sync-review.md`.
+- `mix eventstore.sync_stress`: a seeded, randomized two-node stress test with
+  partitions, node and replicator kills, handovers, archives and a forced
+  reclaim. It checks that no acknowledged write is lost and that both nodes end
+  up identical. `SYNC_STRESS_SECONDS` sets the duration (default 300) and
+  `SYNC_STRESS_SEED` replays a run. `docs/sync-manual-stress-test.md` is the
+  manual counterpart, with a load generator, `EventstoreSqlite.Sync.DevLoad`,
+  in the dev environment. The dev config reads `DB` and `NODE_ID` from the
+  environment.
 
 ### Fixed
 
-- Subscribers of a stream could miss events for good when the process that
-  appended them died between the commit and notifying the subscription
-  process, if nothing was appended to that stream afterwards. The subscription
-  process now also checks every subscribed stream for undelivered events once
-  a second. Set `config :eventstore_sqlite, subscription_reconcile_interval: ms`
-  to change the interval.
+- **Subscribers could miss events for good.** This happened when the process
+  that appended them died between the commit and notifying the subscription
+  process, and nothing was appended to that stream afterwards. See the
+  subscription check under Changed.
 
 ### Changed
 
-- An append reads the sync state in its transaction. With sync disabled this
-  costs about 18 µs per append (about 5% of a single-event append). With sync
-  enabled, writing the log adds about 28%.
+- **Every append reads the sync state in its transaction.** With sync disabled
+  this costs about 18 µs per single-event append (about 5%). With sync
+  enabled, the ownership check and the change log entry add about 28%. See
+  "Cost" in `EventstoreSqlite.Sync`.
+- **The subscription process checks once a second for undelivered events.** On
+  an idle store this is one primary-key read per second. When rows were
+  written since the last check, it compares each subscribed stream's version
+  with what it delivered. Set
+  `config :eventstore_sqlite, subscription_reconcile_interval: ms` to change
+  the interval.
+- `telemetry` is now a direct dependency. It was already present through Ecto.
+- The application starts a `:pg` scope and a sync supervisor. Neither does
+  anything until sync is enabled.
 
 ## [2026-10-02]
 

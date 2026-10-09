@@ -55,6 +55,18 @@ defmodule EventstoreSqlite.Sync do
     * An entry that would break the single-writer rule halts replication from
       that peer instead of being applied (`status/0`, `resume/1`).
 
+  ## Cost
+
+  Every append and archive reads the sync state in its transaction, also when
+  sync is disabled. Measured on single-event appends:
+
+    * sync disabled: about 18 µs more per append, about 5%;
+    * sync enabled: about 28% more, for the ownership check and the change log
+      entry written in the same transaction.
+
+  Replication itself runs in the background and doesn't slow appends down, but
+  it shares SQLite's single write connection with them.
+
   `status/0` and `verify/2` are for operators. The design and its review are
   in `docs/issues/0008-multi-node-sync-plan.md`; a manual stress test is in
   `docs/sync-manual-stress-test.md`.
@@ -170,6 +182,10 @@ defmodule EventstoreSqlite.Sync do
     * a retired peer must be drained: it reported itself diverged, and this node
       has pulled up to the head it reported then (`{:error, :not_drained}`
       otherwise). Its late entries are then all applied or quarantined.
+
+  A peer's acknowledgement is recorded shortly after its pull, so right after
+  it caught up this can return `{:error, :not_caught_up}` for up to about a
+  second; retry.
 
   `discard_unpulled: true` skips those checks, for a peer that is gone for
   good. Whatever it wrote after this node's last pull is lost; the removal

@@ -1,6 +1,10 @@
 # Plan — multi-node sync with one writer per stream
 
-- **Status:** Implemented 2026-10-09 (see "Implementation notes" at the end). Plan revision 7, approved by both outside reviewers; see [the review log](0008-multi-node-sync-review.md). Design and decisions:
+- **Status:** Implemented 2026-10-09 (see "Implementation notes" at the end).
+  Still to do: run the manual stress test together (TODO in
+  `docs/sync-manual-stress-test.md`); schedule `mix eventstore.sync_stress`
+  nightly once the repo has CI (it isn't scheduled anywhere yet); issue 0009
+  before production use. Plan revision 7, approved by both outside reviewers; see [the review log](0008-multi-node-sync-review.md). Design and decisions:
   [0008](0008-multi-node-sync.md). Related: [0009](0009-subscriptions-end-silently.md).
 - **Goal:** two instances of an app, each with its own eventstore_sqlite
   database, both holding every event. Each stream has exactly one node that may

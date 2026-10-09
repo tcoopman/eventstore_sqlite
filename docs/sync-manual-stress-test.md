@@ -1,5 +1,8 @@
 # Manual stress test of multi-node sync
 
+- **Status: TODO.** Not run yet. To be run together with the owner, on two
+  machines.
+
 A runbook for testing sync by hand with two running nodes: **main-node**, the
 home node, and **secondary-node**, provisioned from a snapshot. It goes through
 every situation the design has to survive: catch-up, writes from both sides, a

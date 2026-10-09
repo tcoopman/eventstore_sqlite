@@ -57,6 +57,7 @@ defmodule EventstoreSqlite.Subscriptions do
     {:ok,
      %{
        subscribed_streams: %{},
+       reconciled_up_to: nil,
        subscribers: %{},
        streams_to_handle: :queue.new(),
        monitors: %{}
@@ -119,8 +120,14 @@ defmodule EventstoreSqlite.Subscriptions do
 
   def handle_info(:reconcile, state) do
     schedule_reconcile()
-    state = Enum.reduce(streams_behind(state.subscribed_streams), state, &update_streams_to_handle(&2, &1))
-    {:noreply, state, {:continue, :handle_stream}}
+    last_row = last_stream_event_row()
+
+    if last_row == state.reconciled_up_to do
+      {:noreply, state}
+    else
+      state = Enum.reduce(streams_behind(state.subscribed_streams), state, &update_streams_to_handle(&2, &1))
+      {:noreply, %{state | reconciled_up_to: last_row}, {:continue, :handle_stream}}
+    end
   end
 
   @impl true
@@ -143,6 +150,10 @@ defmodule EventstoreSqlite.Subscriptions do
       :reconcile,
       Application.get_env(:eventstore_sqlite, :subscription_reconcile_interval, 1_000)
     )
+  end
+
+  defp last_stream_event_row do
+    EventstoreSqlite.RepoRead.one(from(s in "sqlite_sequence", where: s.name == "stream_events", select: s.seq))
   end
 
   defp streams_behind(subscribed_streams) when map_size(subscribed_streams) == 0, do: []
