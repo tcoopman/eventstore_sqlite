@@ -15,6 +15,14 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
   without parentheses, so you can drop a local `locals_without_parens` entry
   for it.
 
+### Changed
+
+- Development dependencies: `mneme` is removed, and with it the `rewrite`
+  override. The tests use plain `assert` pattern matches instead of
+  `auto_assert`.
+- Dependencies in the lock file are updated, among them `ecto_sqlite3` 0.25.0
+  and `exqlite` 0.42.0.
+
 ## [2026-10-10]
 
 ### Breaking

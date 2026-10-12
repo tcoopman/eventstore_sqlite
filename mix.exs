@@ -38,7 +38,6 @@ defmodule EventstoreSqlite.MixProject do
       {:ecto_sql, "~> 3.14"},
       {:ecto_sqlite3, ">= 0.0.0"},
       {:jason, "~> 1.4"},
-      {:mneme, "~> 0.9.3", only: [:dev, :test]},
       {:stream_data, "~> 1.1", only: [:dev, :test]},
       {:telemetry, "~> 1.0"},
       {:phoenix_live_view, "~> 1.0", optional: true},
@@ -49,7 +48,6 @@ defmodule EventstoreSqlite.MixProject do
       {:typed_struct, "~> 0.3.0"},
       {:uniq, "~> 0.1"},
       {:benchee, ">= 0.0.0", only: [:bench]},
-      {:rewrite, ">= 0.0.0", only: [:dev, :test], override: true},
       {:styler, "~> 1.9", only: [:dev, :test], runtime: false}
     ]
   end

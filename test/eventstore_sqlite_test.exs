@@ -1,6 +1,5 @@
 defmodule EventstoreSqliteTest do
   use ExUnit.Case
-  use Mneme
   use EventstoreSqlite.DataCase
   use TypedStruct
 
@@ -376,7 +375,7 @@ defmodule EventstoreSqliteTest do
 
   describe "read_stream_forward" do
     test "stream does not exist" do
-      auto_assert([] <- stream_forward("does-not-exist", count: 1))
+      assert [] = stream_forward("does-not-exist", count: 1)
     end
 
     test "1 event" do
@@ -384,19 +383,17 @@ defmodule EventstoreSqliteTest do
       event = %FooTestEvent{text: "some text"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            created_at: date,
-            data: %FooTestEvent{text: "some text"},
-            stream_id: "test-stream-1",
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent",
-            stream_version: 0
-          }
-        ]
-        when is_struct(date, DateTime) <-
-          stream_forward({stream_id, 0}, count: 1)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 created_at: date,
+                 data: %FooTestEvent{text: "some text"},
+                 stream_id: "test-stream-1",
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent",
+                 stream_version: 0
+               }
+             ] = stream_forward({stream_id, 0}, count: 1)
+
+      assert is_struct(date, DateTime)
     end
 
     test "respect count" do
@@ -406,13 +403,11 @@ defmodule EventstoreSqliteTest do
       event3 = %FooTestEvent{text: "some text"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "some text"}
-          }
-        ] <- stream_forward(stream_id, count: 1)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "some text"}
+               }
+             ] = stream_forward(stream_id, count: 1)
     end
 
     test "respect start version" do
@@ -422,31 +417,27 @@ defmodule EventstoreSqliteTest do
       event_3 = %FooTestEvent{text: "3"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event_1, event_2, event_3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "2"}
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "3"}
-          }
-        ] <- stream_forward({stream_id, 1})
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "2"}
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "3"}
+               }
+             ] = stream_forward({stream_id, 1})
 
-      auto_assert([] <- stream_forward("empty-stream"))
+      assert [] = stream_forward("empty-stream")
     end
 
     test "handles nested structures" do
       event = %ComplexEvent{complex: %Complex{c: "complex"}}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %ComplexEvent{complex: %Complex{c: "complex"}}
-          }
-        ] <- stream_forward("test-stream-1")
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %ComplexEvent{complex: %Complex{c: "complex"}}
+               }
+             ] = stream_forward("test-stream-1")
     end
 
     test "handles multiple streams" do
@@ -458,22 +449,20 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_1, event_2])
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_1,
-            stream_id: ^stream_id_1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_2,
-            stream_id: ^stream_id_1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_3,
-            stream_id: ^stream_id_2
-          }
-        ] <- stream_forward([stream_id_1, stream_id_2])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_1,
+                 stream_id: ^stream_id_1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_2,
+                 stream_id: ^stream_id_1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_3,
+                 stream_id: ^stream_id_2
+               }
+             ] = stream_forward([stream_id_1, stream_id_2])
     end
 
     test "handles multiple streams in the correct order" do
@@ -487,26 +476,24 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_3])
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_4])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_1,
-            stream_id: ^stream_id_1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_2,
-            stream_id: ^stream_id_1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_3,
-            stream_id: ^stream_id_2
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_4,
-            stream_id: ^stream_id_1
-          }
-        ] <- stream_forward([stream_id_1, stream_id_2])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_1,
+                 stream_id: ^stream_id_1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_2,
+                 stream_id: ^stream_id_1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_3,
+                 stream_id: ^stream_id_2
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_4,
+                 stream_id: ^stream_id_1
+               }
+             ] = stream_forward([stream_id_1, stream_id_2])
     end
 
     test "combined with all stream - insert order is kept" do
@@ -520,43 +507,41 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_3])
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_4])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_1,
-            stream_id: ^stream_id_1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_2,
-            stream_id: ^stream_id_1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_1,
-            stream_id: "$all",
-            stream_version: 0
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_2,
-            stream_id: "$all",
-            stream_version: 1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_3,
-            stream_id: "$all",
-            stream_version: 2
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_4,
-            stream_id: ^stream_id_1,
-            stream_version: 2
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_4,
-            stream_id: "$all",
-            stream_version: 3
-          }
-        ] <- stream_forward([stream_id_1, "$all"])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_1,
+                 stream_id: ^stream_id_1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_2,
+                 stream_id: ^stream_id_1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_1,
+                 stream_id: "$all",
+                 stream_version: 0
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_2,
+                 stream_id: "$all",
+                 stream_version: 1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_3,
+                 stream_id: "$all",
+                 stream_version: 2
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_4,
+                 stream_id: ^stream_id_1,
+                 stream_version: 2
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_4,
+                 stream_id: "$all",
+                 stream_version: 3
+               }
+             ] = stream_forward([stream_id_1, "$all"])
     end
 
     test "multiple streams with start_version" do
@@ -576,30 +561,28 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_6])
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_7])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_2,
-            stream_id: ^stream_id_1,
-            stream_version: 1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_4,
-            stream_id: ^stream_id_1,
-            stream_version: 2
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_6,
-            stream_id: ^stream_id_2,
-            stream_version: 2
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_7,
-            stream_id: ^stream_id_1,
-            stream_version: 3
-          }
-        ] <- stream_forward([{stream_id_1, 1}, {stream_id_2, 2}])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_2,
+                 stream_id: ^stream_id_1,
+                 stream_version: 1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_4,
+                 stream_id: ^stream_id_1,
+                 stream_version: 2
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_6,
+                 stream_id: ^stream_id_2,
+                 stream_version: 2
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_7,
+                 stream_id: ^stream_id_1,
+                 stream_version: 3
+               }
+             ] = stream_forward([{stream_id_1, 1}, {stream_id_2, 2}])
     end
 
     test "$all stream" do
@@ -609,36 +592,34 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream("stream-1", [event_1, event_2, event_3])
       :ok = EventstoreSqlite.append_to_stream("stream-2", [event_2, event_3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "1"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "2"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "3"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "2"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "3"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          }
-        ] <- stream_forward("$all")
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "1"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "2"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "3"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "2"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "3"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               }
+             ] = stream_forward("$all")
     end
   end
 
   describe "read_stream_backward" do
     test "stream does not exist" do
-      auto_assert([] <- stream_backward("does-not-exist", count: 1))
+      assert [] = stream_backward("does-not-exist", count: 1)
     end
 
     test "1 event" do
@@ -646,19 +627,17 @@ defmodule EventstoreSqliteTest do
       event = %FooTestEvent{text: "some text"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            created_at: date,
-            data: %FooTestEvent{text: "some text"},
-            stream_id: "test-stream-1",
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent",
-            stream_version: 0
-          }
-        ]
-        when is_struct(date, DateTime) <-
-          stream_backward(stream_id, count: 1)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 created_at: date,
+                 data: %FooTestEvent{text: "some text"},
+                 stream_id: "test-stream-1",
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent",
+                 stream_version: 0
+               }
+             ] = stream_backward(stream_id, count: 1)
+
+      assert is_struct(date, DateTime)
     end
 
     test "multiple events" do
@@ -668,13 +647,11 @@ defmodule EventstoreSqliteTest do
       event3 = %FooTestEvent{text: "3"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "3"}},
-          %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "2"}},
-          %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "1"}}
-        ] <- stream_backward(stream_id)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "3"}},
+               %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "2"}},
+               %EventstoreSqlite.RecordedEvent{data: %FooTestEvent{text: "1"}}
+             ] = stream_backward(stream_id)
     end
 
     test "respect count" do
@@ -684,26 +661,22 @@ defmodule EventstoreSqliteTest do
       event3 = %FooTestEvent{text: "3"}
       :ok = EventstoreSqlite.append_to_stream(stream_id, [event1, event2, event3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "3"}
-          }
-        ] <- stream_backward(stream_id, count: 1)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "3"}
+               }
+             ] = stream_backward(stream_id, count: 1)
     end
 
     test "handles nested structures" do
       event = %ComplexEvent{complex: %Complex{c: "complex"}}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %ComplexEvent{complex: %Complex{c: "complex"}}
-          }
-        ] <- stream_backward("test-stream-1")
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %ComplexEvent{complex: %Complex{c: "complex"}}
+               }
+             ] = stream_backward("test-stream-1")
     end
 
     test "handles multiple streams" do
@@ -715,13 +688,11 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_1, event_2])
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: ^stream_id_2},
-          %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: ^stream_id_1},
-          %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: ^stream_id_1}
-        ] <- stream_backward([stream_id_1, stream_id_2])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: ^stream_id_2},
+               %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: ^stream_id_1},
+               %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: ^stream_id_1}
+             ] = stream_backward([stream_id_1, stream_id_2])
     end
 
     test "handles multiple streams in the correct order" do
@@ -735,14 +706,12 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_3])
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_4])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{data: ^event_4, stream_id: ^stream_id_1},
-          %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: ^stream_id_2},
-          %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: ^stream_id_1},
-          %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: ^stream_id_1}
-        ] <- stream_backward([stream_id_1, stream_id_2])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{data: ^event_4, stream_id: ^stream_id_1},
+               %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: ^stream_id_2},
+               %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: ^stream_id_1},
+               %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: ^stream_id_1}
+             ] = stream_backward([stream_id_1, stream_id_2])
     end
 
     test "combined with all stream - insert order is kept" do
@@ -756,29 +725,27 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream(stream_id_2, [event_3])
       :ok = EventstoreSqlite.append_to_stream(stream_id_1, [event_4])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{data: ^event_4, stream_id: "$all", stream_version: 3},
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_4,
-            stream_id: ^stream_id_1,
-            stream_version: 2
-          },
-          %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: "$all", stream_version: 2},
-          %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: "$all", stream_version: 1},
-          %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: "$all", stream_version: 0},
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_2,
-            stream_id: ^stream_id_1,
-            stream_version: 1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: ^event_1,
-            stream_id: ^stream_id_1,
-            stream_version: 0
-          }
-        ] <- stream_backward([stream_id_1, "$all"])
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{data: ^event_4, stream_id: "$all", stream_version: 3},
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_4,
+                 stream_id: ^stream_id_1,
+                 stream_version: 2
+               },
+               %EventstoreSqlite.RecordedEvent{data: ^event_3, stream_id: "$all", stream_version: 2},
+               %EventstoreSqlite.RecordedEvent{data: ^event_2, stream_id: "$all", stream_version: 1},
+               %EventstoreSqlite.RecordedEvent{data: ^event_1, stream_id: "$all", stream_version: 0},
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_2,
+                 stream_id: ^stream_id_1,
+                 stream_version: 1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: ^event_1,
+                 stream_id: ^stream_id_1,
+                 stream_version: 0
+               }
+             ] = stream_backward([stream_id_1, "$all"])
     end
 
     test "$all stream" do
@@ -788,30 +755,28 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream("stream-1", [event_1, event_2, event_3])
       :ok = EventstoreSqlite.append_to_stream("stream-2", [event_2, event_3])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "3"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "2"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "3"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "2"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          },
-          %EventstoreSqlite.RecordedEvent{
-            data: %FooTestEvent{text: "1"},
-            type: "Elixir.EventstoreSqliteTest.FooTestEvent"
-          }
-        ] <- stream_backward("$all")
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "3"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "2"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "3"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "2"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 data: %FooTestEvent{text: "1"},
+                 type: "Elixir.EventstoreSqliteTest.FooTestEvent"
+               }
+             ] = stream_backward("$all")
     end
   end
 
@@ -881,7 +846,7 @@ defmodule EventstoreSqliteTest do
 
   describe "list_streams/0" do
     test "no streams" do
-      auto_assert([] <- EventstoreSqlite.list_streams())
+      assert [] = EventstoreSqlite.list_streams()
     end
 
     test "multiple streams" do
@@ -890,7 +855,7 @@ defmodule EventstoreSqliteTest do
       :ok = EventstoreSqlite.append_to_stream("stream-1", [event_1])
       :ok = EventstoreSqlite.append_to_stream("stream-2", [event_2])
 
-      auto_assert(["$all", "stream-1", "stream-2"] <- EventstoreSqlite.list_streams())
+      assert ["$all", "stream-1", "stream-2"] = EventstoreSqlite.list_streams()
     end
   end
 

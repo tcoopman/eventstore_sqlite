@@ -1,6 +1,5 @@
 defmodule EventstoreSqlite.SubscribeTest do
   use ExUnit.Case
-  use Mneme
   use EventstoreSqlite.DataCase
   use TypedStruct
 
@@ -59,7 +58,7 @@ defmodule EventstoreSqlite.SubscribeTest do
       {:ok, pid} = Subscriber.subscribe("$all")
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [])
 
-      auto_assert([] <- Subscriber.events(pid))
+      assert [] = Subscriber.events(pid)
     end
 
     test "a single event is added" do
@@ -67,14 +66,12 @@ defmodule EventstoreSqlite.SubscribeTest do
       event = %FooTestEvent{text: "some text"}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 0
-          }
-        ] <- Subscriber.events(pid)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 0
+               }
+             ] = Subscriber.events(pid)
     end
 
     test "multiple events are added" do
@@ -82,22 +79,20 @@ defmodule EventstoreSqlite.SubscribeTest do
       event = %FooTestEvent{text: "some text"}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 0
-          },
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 1
-          },
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 2
-          }
-        ] <- Subscriber.events(pid)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 0
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 1
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 2
+               }
+             ] = Subscriber.events(pid)
     end
 
     test "multiple steps only receives the current ones" do
@@ -105,29 +100,25 @@ defmodule EventstoreSqlite.SubscribeTest do
       event = %FooTestEvent{text: "some text"}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 0
-          }
-        ] <- Subscriber.events(pid)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 0
+               }
+             ] = Subscriber.events(pid)
 
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 0
-          },
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 1
-          }
-        ] <- Subscriber.events(pid)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 0
+               },
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 1
+               }
+             ] = Subscriber.events(pid)
     end
 
     test "only receives minimum version on subscription" do
@@ -140,14 +131,12 @@ defmodule EventstoreSqlite.SubscribeTest do
       assert :ok = EventstoreSqlite.subscribe_to_stream(self(), "$all", 2)
       event = %FooTestEvent{text: "some text"}
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 2
-          }
-        ] <- Subscriber.events(pid)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 2
+               }
+             ] = Subscriber.events(pid)
     end
 
     test "only receives minimum version on subscription even if that version was not in the stream yet" do
@@ -158,14 +147,12 @@ defmodule EventstoreSqlite.SubscribeTest do
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{
-            stream_id: "$all",
-            stream_version: 2
-          }
-        ] <- Subscriber.events(pid)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{
+                 stream_id: "$all",
+                 stream_version: 2
+               }
+             ] = Subscriber.events(pid)
     end
   end
 
@@ -177,10 +164,8 @@ defmodule EventstoreSqlite.SubscribeTest do
       {:ok, pid} = Subscriber.subscribe("test-stream-1", :current)
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}] <-
-          Subscriber.events(pid)
-      )
+      assert [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}] =
+               Subscriber.events(pid)
     end
 
     test "a stream that does not exist yet starts from the beginning" do
@@ -189,10 +174,8 @@ defmodule EventstoreSqlite.SubscribeTest do
       event = %FooTestEvent{text: "some text"}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0}] <-
-          Subscriber.events(pid)
-      )
+      assert [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0}] =
+               Subscriber.events(pid)
     end
 
     test "works for the $all stream" do
@@ -202,10 +185,8 @@ defmodule EventstoreSqlite.SubscribeTest do
       {:ok, pid} = Subscriber.subscribe("$all", :current)
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-2", [event])
 
-      auto_assert(
-        [%EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3}] <-
-          Subscriber.events(pid)
-      )
+      assert [%EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3}] =
+               Subscriber.events(pid)
     end
   end
 
@@ -278,10 +259,8 @@ defmodule EventstoreSqlite.SubscribeTest do
       event = %FooTestEvent{text: "some text"}
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0}] <-
-          Subscriber.events(alive)
-      )
+      assert [%EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0}] =
+               Subscriber.events(alive)
     end
 
     test "resubscribing after the last subscriber died starts from the requested version" do
@@ -295,13 +274,11 @@ defmodule EventstoreSqlite.SubscribeTest do
       {:ok, second} = Subscriber.subscribe("test-stream-1")
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0},
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 1},
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}
-        ] <- Subscriber.events(second)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0},
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 1},
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2}
+             ] = Subscriber.events(second)
     end
   end
 
@@ -355,23 +332,19 @@ defmodule EventstoreSqlite.SubscribeTest do
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event])
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0},
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 1},
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2},
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 3},
-          %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 4}
-        ] <- Subscriber.events(test_stream_1)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 0},
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 1},
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 2},
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 3},
+               %EventstoreSqlite.RecordedEvent{stream_id: "test-stream-1", stream_version: 4}
+             ] = Subscriber.events(test_stream_1)
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 2},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 4}
-        ] <- Subscriber.events(all)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 2},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 4}
+             ] = Subscriber.events(all)
     end
 
     test "2 different versions subscribed" do
@@ -382,21 +355,17 @@ defmodule EventstoreSqlite.SubscribeTest do
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-1", [event, event, event])
       assert :ok = EventstoreSqlite.append_to_stream("test-stream-2", [event, event, event])
 
-      auto_assert(
-        [
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 0},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 1},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 2},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 4},
-          %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 5}
-        ] <- Subscriber.events(all_0)
-      )
+      assert [
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 0},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 1},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 2},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 3},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 4},
+               %EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 5}
+             ] = Subscriber.events(all_0)
 
-      auto_assert(
-        [%EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 5}] <-
-          Subscriber.events(all_5)
-      )
+      assert [%EventstoreSqlite.RecordedEvent{stream_id: "$all", stream_version: 5}] =
+               Subscriber.events(all_5)
     end
   end
 end
