@@ -5,6 +5,16 @@ changelog releases are maintained, so entries are grouped by date (ISO 8601,
 `YYYY-MM-DD`). The categories follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2026-10-12]
+
+### Added
+
+- The library's `.formatter.exs` exports `locals_without_parens` for
+  `live_eventstore`. Add `:eventstore_sqlite` to `import_deps` in your
+  `.formatter.exs` and `mix format` leaves `live_eventstore "/eventstore"`
+  without parentheses, so you can drop a local `locals_without_parens` entry
+  for it.
+
 ## [2026-10-10]
 
 ### Breaking

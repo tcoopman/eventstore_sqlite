@@ -38,6 +38,13 @@ scope "/" do
 end
 ```
 
+To keep `mix format` from adding parentheses to `live_eventstore`, add the
+library to `import_deps` in your `.formatter.exs`:
+
+```elixir
+import_deps: [:phoenix, :eventstore_sqlite]
+```
+
 Put it behind authentication: it shows stream names. See
 `EventstoreSqlite.LiveEventstore.Router` for the options. To try it without an
 app: `DB=demo.db mix ecto.create && DB=demo.db mix ecto.migrate && DB=demo.db
